@@ -1,0 +1,2 @@
+# coal_blending_system_model_tuning
+本科毕业设计-基于大模型的智能配煤系统-大模型微调
