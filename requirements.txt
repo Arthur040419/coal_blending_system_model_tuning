@@ -6,5 +6,5 @@ torch>=2.3.0
 transformers>=4.44.0
 trl>=0.9.6
 
-# Optional for QLoRA on supported Linux/CUDA environments:
+# Optional — 4-bit QLoRA (CUDA only; not supported on Mac MPS):
 # bitsandbytes>=0.43.0

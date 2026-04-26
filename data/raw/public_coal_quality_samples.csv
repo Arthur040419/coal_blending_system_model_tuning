@@ -1,6 +1,9 @@
 sample_id,sample_name,region,coal_rank,moisture_content,ash_content,sulfur_content,volatile_content,calorific_value,available_quantity,unit_cost,source_title,source_url,source_note
-BMK-SEAM-1,BMK 1号煤层样本,Indonesia,lignite,22.08,62.25,0.80,23.91,2155.77,3000,220,"Proximate Analysis, Sulfur, and Calorific Value in Determining Coal Quality","https://www.researchgate.net/publication/383971322_Proximate_Analysis_Sulfur_and_Calorific_Value_in_Determining_Coal_Quality","公开文献摘要给出三层煤样的水分、灰分、挥发分、硫分和发热量；该样本灰分极高，仅用于负样本/限配场景。"
-BMK-SEAM-2,BMK 2号煤层样本,Indonesia,bituminous,14.64,6.29,0.37,37.45,7336,6200,610,"Proximate Analysis, Sulfur, and Calorific Value in Determining Coal Quality","https://www.researchgate.net/publication/383971322_Proximate_Analysis_Sulfur_and_Calorific_Value_in_Determining_Coal_Quality","公开文献摘要给出三层煤样的水分、灰分、挥发分、硫分和发热量；该样本低灰低硫高热值。"
-BMK-SEAM-3,BMK 3号煤层样本,Indonesia,anthracite,9.71,2.84,0.32,41.87,8207,5200,720,"Proximate Analysis, Sulfur, and Calorific Value in Determining Coal Quality","https://www.researchgate.net/publication/383971322_Proximate_Analysis_Sulfur_and_Calorific_Value_in_Determining_Coal_Quality","公开文献摘要给出三层煤样的水分、灰分、挥发分、硫分和发热量；该样本热值高、硫分低，可作高热值补偿煤。"
-ZHUNDONG-WCW-AD,准东五彩湾煤空气干燥基样本,Xinjiang China,low-rank bituminous,11.17,6.43,0.51,27.91,5200,7000,380,"准东五彩湾煤中碱/碱土金属含量及迁移特性试验研究","https://eri.usst.edu.cn/html/2018/4/20180407.htm","文中表1给出五彩湾煤 M_ad=11.17%、A_ad=6.43%、V_ad=27.91%、S_t,ad=0.51%；热值按中等动力煤场景保守设定。"
-ZHUNDONG-WCW-AR,准东五彩湾煤收到基样本,Xinjiang China,low-rank bituminous,25.01,3.34,0.28,31.12,4810,8000,350,"涂层对燃用准东煤锅炉受热面沾污特性的影响","https://jns.usst.edu.cn/html/2019/1/20190105.htm","文中表1给出五彩湾煤 M=25.01%、A=3.34%、V=31.12%、S=0.28%、Q_net.ad=20167.07 kJ/kg；折算约4810 kcal/kg。"
+SM-5800,神木不粘煤,陕西榆林,bituminous,14.0,7.5,0.40,32.0,5800,8000,550,榆林煤价格指数2025,https://drc.yl.gov.cn/,神木矿区5800大卡动力煤；特低灰特低硫；优质化工用煤及配煤主力煤种。
+DT-5500,大同弱粘煤,山西大同,bituminous,10.0,13.0,1.20,29.0,5500,10000,650,中国煤炭资源网 区域煤炭品质全梳理,https://www.cctd.com.cn/show-176-171895-1.html,大同矿区标准5500大卡动力煤；中国动力煤基准煤种；硫分偏高需搭配低硫煤。
+ZD-4200,准东长焰煤,新疆准东,sub-bituminous,25.0,8.0,0.35,32.0,4200,15000,80,准东煤及其混煤燃烧与结渣特性(洁净煤技术2019),https://www.jjmjs.com.cn/en/article/doi/10.13226/j.issn.1006-6772.18101001,高钠煤(Na₂O 2-10%)；纯烧结渣沾污严重；一般掺烧比例≤50%。
+YQ-6800,阳泉无烟煤,山西阳泉,anthracite,7.0,14.0,1.30,9.0,6800,5000,600,阳泉煤业竞价销售交易公告 2025,https://www.gc-zb.com.cn/,低挥发分无烟煤；高热值用于高炉喷吹和配煤提热；掺配时须注意挥发分差值限制。
+DS-6500,东胜不粘煤,内蒙古鄂尔多斯,bituminous,12.0,6.0,0.30,31.0,6500,7000,520,中国煤炭资源概况 区域煤炭品质全梳理,https://www.cctd.com.cn/show-176-171895-1.html,特低灰特低硫特低磷；优活动力煤；三低六高享誉国际市场。
+PS-5200,平朔气煤,山西朔州,bituminous,11.0,18.0,0.90,34.0,5200,12000,480,超超临界机组平朔煤掺配掺烧试验研究(中国电力2012),https://www.electricpower.com.cn/CN/Y2012/V45/I9/11,中等灰分气煤；挥发分较高；可掺配低硫印尼煤或蒙古煤使用。
+LL-7400,离柳焦煤,山西吕梁,coking,6.0,9.3,1.80,22.0,7400,4000,850,中国煤炭资源网,https://www.cctd.com.cn/,离柳矿区主焦煤(熊猫煤)；粘结指数G=75-88；国内稀缺优质炼焦煤；高硫是主要缺点。
+LPS-5000,六盘水贫煤,贵州六盘水,lean,9.0,25.0,3.50,16.0,5000,9000,420,中国主要煤田煤质数据汇总,https://www.cctd.com.cn/,高灰高硫贫煤；代表西南地区典型煤质；必须与低硫煤掺配方可使用。

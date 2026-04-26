@@ -1,9 +1,9 @@
 {
-  "total": 12,
+  "total": 13,
   "valid_json_rate": 1.0,
   "by_task": {
     "plan_explanation": {
-      "total": 9,
+      "total": 11,
       "valid_json_rate": 1.0,
       "complete_field_rate": 1.0,
       "nonempty_field_rate": 1.0,
@@ -16,17 +16,28 @@
       }
     },
     "candidate_generation": {
-      "total": 3,
+      "total": 2,
       "valid_json_rate": 1.0,
       "complete_field_rate": 1.0,
       "nonempty_field_rate": 1.0,
       "field_nonempty_rate": {
         "plans": 1.0
       },
-      "candidate_plan_count": 8,
+      "candidate_plan_count": 6,
       "valid_candidate_plan_rate": 1.0,
       "valid_ratio_plan_rate": 1.0,
-      "valid_item_count_plan_rate": 1.0
+      "valid_item_count_plan_rate": 1.0,
+      "business_plan_count": 6,
+      "average_business_effect_score": 0.7151,
+      "best_plan_business_effect_score": 0.7476,
+      "radar_metrics": {
+        "质量达标": 0.7917,
+        "质量余量": 0.4161,
+        "成本优势": 0.3992,
+        "库存可执行": 0.972,
+        "配比均衡": 0.9907,
+        "风险控制": 1.0
+      }
     }
   }
 }

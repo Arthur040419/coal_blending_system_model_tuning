@@ -9,7 +9,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Create an Ollama Modelfile template for a merged or converted coal model."
     )
-    parser.add_argument("--base", default="qwen2.5:1.5b-instruct")
+    parser.add_argument("--base", default="qwen3:4b")
     parser.add_argument("--output", default="outputs/adapters/Modelfile")
     args = parser.parse_args()
 

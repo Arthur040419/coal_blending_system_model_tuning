@@ -1,6 +1,6 @@
-# Suggested baseline for a small, reproducible graduation-project experiment.
-# Adjust model_name_or_path to a local path if you have already downloaded the model.
-model_name_or_path: Qwen/Qwen2.5-1.5B-Instruct
+# LoRA fine-tuning config for coal blending model
+# Target: Qwen3-4B-Instruct (Ollama qwen3:4b's HuggingFace source)
+model_name_or_path: Qwen/Qwen3-4B-Instruct
 train_file: data/processed/train.jsonl
 eval_file: data/processed/eval.jsonl
 output_dir: outputs/adapters/qwen-coal-lora
@@ -28,7 +28,15 @@ target_modules:
   - up_proj
   - down_proj
 
-use_4bit: false
+# 4-bit QLoRA — auto-enabled for CUDA, ignored on MPS/CPU.
+# On Mac M4 MPS: runs fp16 without quantization.
+# On cloud GPU (T4/A10): 4-bit saves ~75% VRAM.
+use_4bit: true
 bf16: false
 fp16: true
 
+# Set true only if the model tokenizer chat template supports assistant token masks.
+assistant_only_loss: false
+
+# Keep false for real training. CPU training is only suitable for tiny smoke-test models.
+allow_cpu_training: false

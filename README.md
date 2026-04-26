@@ -8,7 +8,7 @@
 2. 补充公开煤质资料样本，构造更真实的候选物料场景。
 3. 构造双任务指令微调样本：候选方案生成 + 方案解释生成。
 4. 使用开源大模型做 LoRA/QLoRA 领域适配。
-5. 对比调优前后候选 JSON 合法率、配比合法率、后端可接收率、解释字段完整率等指标。
+5. 在主系统后端对调优前后模型生成的配煤方案进行统一评分，并记录质量、成本、库存和综合评分。
 6. 将调优后的模型通过 Ollama 或 OpenAI Chat Completions 兼容服务接入主系统。
 
 ## 目录结构
@@ -99,6 +99,25 @@ outputs/adapters/qwen-coal-lora/
 
 ## 评估
 
+模型优化前后对比建议以主系统后端为准：切换 `model_config` 中启用的模型，分别使用优化前模型和优化后模型生成同一订单的配煤方案。后端会将评分结果写入 `experiment_record` 表，并通过以下接口提供评分表和雷达图数据：
+
+生成方案时可以传入相同的 `experimentCode`，便于把优化前后结果归为同一组实验。
+
+```text
+GET /experimentRecord/page
+GET /experimentRecord/byOrder/{orderId}
+GET /experimentRecord/radar?orderId=1
+```
+
+雷达图核心维度为：
+
+- `质量匹配`：质量评分；
+- `成本优势`：成本评分；
+- `库存合理`：库存合理性评分；
+- `综合效果`：综合评分。
+
+下面的离线脚本主要用于训练前后的结构诊断和辅助验证。
+
 不加载模型时，脚本会检查评测集标准答案的 JSON 格式：
 
 ```bash
@@ -126,9 +145,21 @@ python3 scripts/evaluate_json_outputs.py \
 
 重点记录以下指标：
 
-- 通用：`valid_json_rate`、`complete_field_rate`、`nonempty_field_rate`；
-- 候选生成：`valid_candidate_plan_rate`、`valid_ratio_plan_rate`、`valid_item_count_plan_rate`；
+- 业务质量：`average_business_effect_score`、`best_plan_business_effect_score`、`radar_metrics`；
+- 候选生成：`质量达标`、`质量余量`、`成本优势`、`库存可执行`、`配比均衡`、`风险控制`；
+- 基础诊断：`valid_json_rate`、`complete_field_rate`、`valid_ratio_plan_rate`、`valid_item_count_plan_rate`；
 - 解释生成：五个解释字段的非空率。
+
+生成优化前后业务质量雷达图：
+
+```bash
+python3 scripts/plot_quality_radar.py \
+  --base-report outputs/reports/base_eval_report.json \
+  --tuned-report outputs/reports/lora_eval_report.json \
+  --output outputs/reports/business_quality_radar.svg
+```
+
+论文中建议将格式合法率作为基础诊断，把业务质量雷达图和指标表作为主要对比结果。
 
 ## 接入主系统
 

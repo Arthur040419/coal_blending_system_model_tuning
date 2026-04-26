@@ -15,15 +15,16 @@ SYSTEM_PROMPT = """你是煤矿智能配煤系统中的方案解释助手。
 
 CANDIDATE_SYSTEM_PROMPT = """你是煤矿智能配煤系统中的候选方案生成助手。
 你的任务是根据订单约束、候选物料、煤质指标、库存、规则、案例和 RAG 知识，
-生成 3 到 5 个可交给后端评分校验的候选配比方案。
+生成 3 到 5 个具有实际业务价值的候选配比方案。
 
 必须遵守：
 1. 只能使用输入中提供的 coalId 和 productBatchNo，不得编造煤种、批次、煤质或库存；
 2. 每个候选方案使用 2 到 4 种物料；
 3. 每个候选方案的 ratio 之和必须等于 1 或非常接近 1；
-4. 不要修改订单需求量，不要输出明显超过库存的配比；
-5. 输出必须是合法 JSON，不要输出 Markdown、HTML 或额外解释；
-6. JSON 顶层只能包含 plans 字段。
+4. 优先满足灰分、硫分、水分和发热量约束，在达标基础上保留质量安全余量；
+5. 在质量达标前提下控制吨煤成本，并避免明显超过库存的配比；
+6. 输出必须是合法 JSON，不要输出 Markdown、HTML 或额外解释；
+7. JSON 顶层只能包含 plans 字段。
 """
 
 OUTPUT_SCHEMA_HINT = """请严格输出 JSON，字段如下：
@@ -66,11 +67,6 @@ def build_candidate_user_prompt(context: str) -> str:
 
 
 def to_chatml(system_prompt: str, user_prompt: str, assistant_output: str | None = None) -> str:
-    """Build a tokenizer-agnostic chat-style text sample.
-
-    Training scripts may instead use tokenizer.apply_chat_template when supported.
-    This fallback keeps the JSONL readable and portable.
-    """
     text = (
         f"<|system|>\n{system_prompt.strip()}\n"
         f"<|user|>\n{user_prompt.strip()}\n"
@@ -79,3 +75,4 @@ def to_chatml(system_prompt: str, user_prompt: str, assistant_output: str | None
     if assistant_output is not None:
         text += assistant_output.strip()
     return text
+

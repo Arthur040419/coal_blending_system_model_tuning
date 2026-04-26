@@ -70,9 +70,10 @@ def build_explanation_records(tables: dict[str, list[dict[str, object | None]]])
             "caseReference": safe_text(plan.get("case_reference"), fallback_case_reference(cases)),
             "recommendReason": safe_text(plan.get("recommend_reason"), fallback_recommend_reason(plan)),
             "riskTip": safe_text(plan.get("risk_tip"), "当前方案未发现明确风险，执行前仍需复核库存与煤质实测数据。"),
-            "finalExplanation": safe_text(plan.get("final_explanation"), safe_text(plan.get("explanation"))),
+            "finalExplanation": build_final_explanation(plan, details, coal_types),
         }
         user_prompt = build_user_prompt(context)
+        assistant_output = json_dumps(output)
         records.append(
             {
                 "id": f"plan-{plan.get('id')}",
@@ -83,9 +84,9 @@ def build_explanation_records(tables: dict[str, list[dict[str, object | None]]])
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
-                    {"role": "assistant", "content": json_dumps(output)},
+                    {"role": "assistant", "content": assistant_output},
                 ],
-                "text": to_chatml(SYSTEM_PROMPT, user_prompt, json_dumps(output)),
+                "text": to_chatml(SYSTEM_PROMPT, user_prompt, assistant_output),
                 "meta": {
                     "planId": plan.get("id"),
                     "planCode": plan.get("plan_code"),
@@ -149,6 +150,7 @@ def build_candidate_generation_records(tables: dict[str, list[dict[str, object |
         if not output["plans"]:
             continue
         user_prompt = build_candidate_user_prompt(context)
+        assistant_output = json_dumps(output)
         records.append(
             {
                 "id": f"candidate-order-{order_id}",
@@ -159,9 +161,9 @@ def build_candidate_generation_records(tables: dict[str, list[dict[str, object |
                 "messages": [
                     {"role": "system", "content": CANDIDATE_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
-                    {"role": "assistant", "content": json_dumps(output)},
+                    {"role": "assistant", "content": assistant_output},
                 ],
-                "text": to_chatml(CANDIDATE_SYSTEM_PROMPT, user_prompt, json_dumps(output)),
+                "text": to_chatml(CANDIDATE_SYSTEM_PROMPT, user_prompt, assistant_output),
                 "meta": {
                     "orderId": order_id,
                     "candidateScope": candidate_scope,
@@ -185,32 +187,7 @@ def read_public_coal_quality_csv(path: str | Path | None) -> list[dict[str, obje
 def build_public_candidate_generation_records(samples: list[dict[str, object | None]]) -> list[dict[str, Any]]:
     cleaned = [s for s in samples if _has_public_quality(s)]
     records: list[dict[str, Any]] = []
-    scenarios = [
-        {
-            "id": "public-low-sulfur-power",
-            "orderCode": "PUBLIC-LOW-S-001",
-            "customerName": "公开煤质样本低硫电煤场景",
-            "demandQuantity": 5000.0,
-            "targetAsh": 18.0,
-            "targetSulfur": 0.8,
-            "targetMoisture": 12.0,
-            "targetCalorific": 5200.0,
-            "priorityLevel": 2,
-            "strategy": "优先满足硫分和热值约束，兼顾低灰煤与库存稳定性。",
-        },
-        {
-            "id": "public-high-heat",
-            "orderCode": "PUBLIC-HIGH-CV-001",
-            "customerName": "公开煤质样本高热值补偿场景",
-            "demandQuantity": 3200.0,
-            "targetAsh": 14.0,
-            "targetSulfur": 0.7,
-            "targetMoisture": 10.0,
-            "targetCalorific": 6000.0,
-            "priorityLevel": 3,
-            "strategy": "以高热值低灰煤为主，少量引入低成本或低硫煤调节。",
-        },
-    ]
+    scenarios = _build_all_public_scenarios()
     for scenario in scenarios:
         materials = public_samples_to_materials(cleaned)
         plans = build_public_candidate_plans(scenario, materials)
@@ -219,6 +196,7 @@ def build_public_candidate_generation_records(samples: list[dict[str, object | N
         context = build_public_candidate_context(scenario, materials)
         output = {"plans": plans}
         user_prompt = build_candidate_user_prompt(context)
+        assistant_output = json_dumps(output)
         records.append(
             {
                 "id": f"candidate-{scenario['id']}",
@@ -229,13 +207,140 @@ def build_public_candidate_generation_records(samples: list[dict[str, object | N
                 "messages": [
                     {"role": "system", "content": CANDIDATE_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
-                    {"role": "assistant", "content": json_dumps(output)},
+                    {"role": "assistant", "content": assistant_output},
                 ],
-                "text": to_chatml(CANDIDATE_SYSTEM_PROMPT, user_prompt, json_dumps(output)),
+                "text": to_chatml(CANDIDATE_SYSTEM_PROMPT, user_prompt, assistant_output),
                 "meta": {"source": "public_coal_quality_samples", "scenario": scenario["id"]},
             }
         )
     return records
+
+
+def _build_all_public_scenarios() -> list[dict[str, object | None]]:
+    """Return realistic coal blending scenarios based on actual Chinese power/steel industry cases.
+
+    Each scenario maps to a real-world blending pattern documented in industry papers
+    (see CSV source_url fields for references).
+    """
+    return [
+        # ── Case 1: 低硫环保电煤 — 神木+大同经典搭配 ──────────
+        {
+            "id": "public-low-sulfur-power",
+            "orderCode": "PUBLIC-LOW-S-001",
+            "customerName": "沿海电厂低硫动力煤采购",
+            "demandQuantity": 5000.0,
+            "targetAsh": 15.0,
+            "targetSulfur": 0.60,
+            "targetMoisture": 13.0,
+            "targetCalorific": 5600.0,
+            "priorityLevel": 2,
+            "strategy": "以低硫低灰的神木煤为主力（60-70%），搭配大同煤调节热值和成本；重点控制硫分≤0.6%。",
+        },
+        # ── Case 2: 高热值补偿 — 阳泉无烟煤提热 ─────────────────
+        {
+            "id": "public-high-heat",
+            "orderCode": "PUBLIC-HIGH-CV-001",
+            "customerName": "高炉喷吹用煤配煤",
+            "demandQuantity": 3200.0,
+            "targetAsh": 12.0,
+            "targetSulfur": 0.80,
+            "targetMoisture": 10.0,
+            "targetCalorific": 6500.0,
+            "priorityLevel": 3,
+            "strategy": "以高热值阳泉无烟煤为主，搭配低硫东胜煤；注意挥发分差值限制（无烟煤V<10%，配煤后V≥20%）。",
+        },
+        # ── Case 3: 准东高钠煤掺烧 — 酒钢宏晟案例 ──────────────
+        {
+            "id": "public-zhundong-blend",
+            "orderCode": "PUBLIC-ZD-001",
+            "customerName": "新疆准东煤掺烧配煤",
+            "demandQuantity": 6000.0,
+            "targetAsh": 12.0,
+            "targetSulfur": 0.60,
+            "targetMoisture": 18.0,
+            "targetCalorific": 4800.0,
+            "priorityLevel": 2,
+            "strategy": "准东煤（高钠易结渣）掺配比例控制在50%以下；用大同煤或东胜煤稀释钠含量降低结渣风险。",
+        },
+        # ── Case 4: 多煤种均衡 — 张家口热电四煤种 0:2:5:3 ────
+        {
+            "id": "public-balanced-multi",
+            "orderCode": "PUBLIC-BAL-001",
+            "customerName": "多煤种均衡掺配动力煤",
+            "demandQuantity": 5000.0,
+            "targetAsh": 16.0,
+            "targetSulfur": 0.90,
+            "targetMoisture": 14.0,
+            "targetCalorific": 5300.0,
+            "priorityLevel": 2,
+            "strategy": "参考张家口热电四煤种方案；以中档煤为主力（50%），高/低档煤各搭配25%；平衡成本与质量。",
+        },
+        # ── Case 5: 低成本经济型 — 曲靖电厂高比例低质煤 ─────
+        {
+            "id": "public-cost-priority",
+            "orderCode": "PUBLIC-COST-001",
+            "customerName": "低负荷经济掺烧配煤",
+            "demandQuantity": 7000.0,
+            "targetAsh": 22.0,
+            "targetSulfur": 1.50,
+            "targetMoisture": 15.0,
+            "targetCalorific": 4500.0,
+            "priorityLevel": 1,
+            "strategy": "约束宽松优先降成本；高灰高硫六盘水煤可占30-40%；用东胜煤补热值同时拉低硫分；准东煤作低成本填料。",
+        },
+        # ── Case 6: 高挥发分配煤挥发分差值限制 ──────────────
+        {
+            "id": "public-volatile-diff",
+            "orderCode": "PUBLIC-VOL-001",
+            "customerName": "高低挥发分煤种搭配配煤",
+            "demandQuantity": 4000.0,
+            "targetAsh": 14.0,
+            "targetSulfur": 0.80,
+            "targetMoisture": 12.0,
+            "targetCalorific": 5600.0,
+            "priorityLevel": 3,
+            "strategy": "阳泉无烟煤（V≈9%）与高挥发分煤搭配；参照GB/T 25960-2010，高低挥发分差值≥15%时低挥发分煤配入量≤20%。",
+        },
+        # ── Case 7: 炼焦煤配煤 — 离柳焦煤高贵煤种 ─────────
+        {
+            "id": "public-coking-blend",
+            "orderCode": "PUBLIC-COKE-001",
+            "customerName": "炼焦配煤优质主焦煤方案",
+            "demandQuantity": 2800.0,
+            "targetAsh": 9.5,
+            "targetSulfur": 1.20,
+            "targetMoisture": 8.0,
+            "targetCalorific": 7200.0,
+            "priorityLevel": 5,
+            "strategy": "以离柳焦煤（低灰强粘结，G=75-88）为主力煤种；搭配东胜煤或大同煤调节硫分至≤1.2%；严格控制灰分。",
+        },
+        # ── Case 8: 超低硫环保合规 — 参照GB/T 25960硫分≤2% ──
+        {
+            "id": "public-ultra-low-sulfur",
+            "orderCode": "PUBLIC-ULS-001",
+            "customerName": "长三角环保严控区低硫电煤",
+            "demandQuantity": 4500.0,
+            "targetAsh": 14.0,
+            "targetSulfur": 0.35,
+            "targetMoisture": 13.0,
+            "targetCalorific": 5700.0,
+            "priorityLevel": 4,
+            "strategy": "硫分约束极严（≤0.35%）；全部物料硫分需≤0.4%；东胜煤和神木煤为主力（硫分均≤0.4%）；大同煤因硫分1.2%禁用。",
+        },
+        # ── Case 9: 大用量保供 — 兼顾多仓库存 ──────────────
+        {
+            "id": "public-high-quantity",
+            "orderCode": "PUBLIC-QTY-001",
+            "customerName": "冬季供暖保供大用量配煤",
+            "demandQuantity": 9000.0,
+            "targetAsh": 18.0,
+            "targetSulfur": 1.00,
+            "targetMoisture": 15.0,
+            "targetCalorific": 5000.0,
+            "priorityLevel": 2,
+            "strategy": "冬季保供大需求；3-4种煤分摊库存压力；大同煤/平朔煤做主力（库存量大），神木煤/东胜煤补质量。",
+        },
+    ]
 
 
 def split_and_write(
@@ -426,7 +531,7 @@ def build_candidate_context(
 ) -> str:
     lines = [
         "你是煤矿智能配煤系统中的候选方案生成助手。请基于订单约束、候选物料、规则和案例，生成候选配比建议。",
-        "重要边界：你只负责提出候选配比，系统会再做质量、库存、规则和多目标评分校验。",
+        "目标：优先生成质量达标、质量余量充足、成本可控且库存可执行的配煤方案。",
         f"\n【候选范围】{candidate_scope}",
         "\n【订单信息】",
         (
@@ -544,18 +649,7 @@ def build_public_candidate_context(
             )
         )
     lines.extend(
-        [
-            "\n【命中规则】",
-            "- 低硫订单优先低硫煤规则：硫分上限较低时优先使用低硫物料，并限制高硫物料比例。",
-            "- 发热量下限校验规则：预测发热量必须不低于订单下限，必要时引入高热值煤补偿。",
-            "- 库存可用性约束规则：物料使用量不得超过可用库存。",
-            "- 高水分煤限配规则：水分上限严格时，应控制高水分煤比例。",
-            "\n【参考案例】",
-            "- 低硫电煤案例：低硫长焰煤与高热值煤组合，兼顾硫分与热值达标。",
-            "- 高热值补偿案例：高热值煤作主配，低成本煤少量参与以降低成本。",
-            "\n【RAG知识摘录】",
-            "- 公开煤质资料表明，不同煤层和矿区煤样在灰分、水分、硫分、热值上差异明显，配煤时需进行线性加权预测并校验硬约束。",
-        ]
+        _build_public_rules_context(scenario)
     )
     return "\n".join(lines)
 
@@ -564,32 +658,57 @@ def build_public_candidate_plans(
     scenario: dict[str, object | None],
     materials: list[dict[str, object | None]],
 ) -> list[dict[str, Any]]:
-    combos = [
-        [("PUBLIC-002", 0.5), ("PUBLIC-003", 0.3), ("PUBLIC-004", 0.2)],
-        [("PUBLIC-003", 0.6), ("PUBLIC-002", 0.4)],
-        [("PUBLIC-005", 0.6), ("PUBLIC-003", 0.4)],
-    ]
     by_batch = {str(m["productBatchNo"]): m for m in materials}
+
+    # All 2-material and 3-material combinations (excluding BMK-SEAM-1 junk coal).
+    premium_batches = [
+        f"PUBLIC-{i:03d}" for i in range(1, len(by_batch) + 1)
+    ]
+    combos: list[list[tuple[str, float]]] = []
+
+    # 2-coal combos: 60/40, 50/50, 40/60
+    for i, a in enumerate(premium_batches):
+        for b in premium_batches[i + 1 :]:
+            for r1, r2 in [(0.6, 0.4), (0.5, 0.5), (0.4, 0.6)]:
+                combos.append([(a, r1), (b, r2)])
+
+    # 3-coal combos: 50/30/20, 40/40/20, 40/30/30, 50/25/25
+    for i, a in enumerate(premium_batches):
+        for j, b in enumerate(premium_batches[i + 1 :], i + 1):
+            for c in premium_batches[j + 1 :]:
+                for r1, r2, r3 in [(0.5, 0.3, 0.2), (0.4, 0.4, 0.2), (0.4, 0.3, 0.3), (0.5, 0.25, 0.25)]:
+                    combos.append([(a, r1), (b, r2), (c, r3)])
+
     plans: list[dict[str, Any]] = []
-    for idx, combo in enumerate(combos, start=1):
+    used_signatures: set[str] = set()
+    for combo in combos:
         selected = [(by_batch[b], r) for b, r in combo if b in by_batch]
         if len(selected) < 2:
             continue
         metrics = _weighted_public_metrics(selected)
         if not _public_plan_reasonable(scenario, metrics):
             continue
+        sig = _combo_signature(selected)
+        if sig in used_signatures:
+            continue
+        used_signatures.add(sig)
         items = [
             {
                 "coalId": _to_int(m["coalId"]),
                 "productBatchNo": str(m["productBatchNo"]),
-                "ratio": ratio,
+                "ratio": round(ratio, 4),
                 "reason": _public_item_reason(m, scenario),
             }
             for m, ratio in selected
         ]
+        # Normalise ratios to sum exactly to 1.
+        total_r = sum(float(i["ratio"]) for i in items)
+        if total_r > 0:
+            for i in items:
+                i["ratio"] = round(float(i["ratio"]) / total_r, 4)
         plans.append(
             {
-                "planName": f"公开煤质候选方案-{chr(64 + idx)}",
+                "planName": f"公开煤质候选方案-{chr(64 + len(plans) + 1)}",
                 "strategy": (
                     f"{scenario['strategy']} 加权预测灰分{metrics['ash']:.2f}%、"
                     f"硫分{metrics['sulfur']:.2f}%、水分{metrics['moisture']:.2f}%、"
@@ -599,6 +718,8 @@ def build_public_candidate_plans(
                 "risk": "公开样本来自文献或数据库摘要，实际执行前需用企业入厂煤质检测值复核。",
             }
         )
+        if len(plans) >= 3:
+            break
     return plans
 
 
@@ -620,6 +741,43 @@ def fallback_recommend_reason(plan: dict[str, object | None]) -> str:
         f"成本评分为 {plan.get('cost_score') or '未知'}，稳定性评分为 {plan.get('stability_score') or '未知'}，"
         "系统根据质量、成本与库存稳定性进行综合推荐。"
     )
+
+
+def build_final_explanation(
+    plan: dict[str, object | None],
+    details: list[dict[str, object | None]],
+    coal_types: dict[str, dict[str, object | None]],
+) -> str:
+    if not details:
+        return safe_text(plan.get("final_explanation"), safe_text(plan.get("explanation")))
+    parts: list[str] = []
+    for d in details:
+        coal = coal_types.get(str(d.get("coal_id")), {})
+        name = coal.get("coal_name") or f"煤种{d.get('coal_id')}"
+        batch = str(d.get("product_batch_no") or "").strip()
+        ratio = _num(d.get("blend_ratio")) * 100
+        material = f"{name}（{batch}）" if batch else str(name)
+        parts.append(f"{material}{ratio:.0f}%")
+    return (
+        "组合为 " + " + ".join(parts)
+        + f"，预测灰分 {fmt_num(details[0].get('predicted_ash'))}%"
+        + f"、硫分 {fmt_num(details[0].get('predicted_sulfur'))}%"
+        + f"、水分 {fmt_num(details[0].get('predicted_moisture'))}%"
+        + f"、发热量 {fmt_num(details[0].get('predicted_calorific'))} kcal/kg；"
+        + f"质量分 {fmt_num(plan.get('quality_score'))}"
+        + f"、成本分 {fmt_num(plan.get('cost_score'))}"
+        + f"、库存稳定性分 {fmt_num(plan.get('stability_score'))}"
+        + f"、综合分 {fmt_num(plan.get('overall_score'))}。"
+    )
+
+
+def fmt_num(value: object | None) -> str:
+    if value is None or value == "":
+        return "—"
+    n = _num(value)
+    if n == 0 and str(value).strip() not in {"0", "0.0", "0.00"}:
+        return str(value)
+    return f"{n:.2f}".rstrip("0").rstrip(".")
 
 
 def _fmt_map(row: dict[str, object | None]) -> dict[str, str]:
@@ -716,6 +874,14 @@ def _estimate_public_unit_cost(row: dict[str, object | None]) -> float:
     return round(max(180, min(price, 760)), 2)
 
 
+def _combo_signature(selected: list[tuple[dict[str, object | None], float]]) -> str:
+    parts = sorted(
+        (str(m.get("productBatchNo") or m.get("coalId")), round(ratio, 4))
+        for m, ratio in selected
+    )
+    return "|".join(f"{k}:{v}" for k, v in parts)
+
+
 def _weighted_public_metrics(selected: list[tuple[dict[str, object | None], float]]) -> dict[str, float]:
     return {
         "ash": sum(_num(m.get("ashContent")) * r for m, r in selected),
@@ -734,14 +900,68 @@ def _public_plan_reasonable(scenario: dict[str, object | None], metrics: dict[st
     )
 
 
+def _build_public_rules_context(scenario: dict[str, object | None]) -> list[str]:
+    """Build realistic blending rule texts based on GB/T 25960-2010 and industry practice."""
+    return [
+        "\n【命中规则（GB/T 25960-2010 动力配煤规范）】",
+        "- 挥发分差值限制规则：高挥发分煤与低挥发分煤Vdaf差值≥15%时，低挥发分煤配入量一般不大于20%，且须先做燃烧试验。",
+        "- 硫分总量控制规则：配煤产品收到基硫分一般≤2.0%；高硫煤（St>2%）应优先洗选降硫，不宜直接配入。",
+        "- 配煤煤种数量规则：一般以2-4种为宜，过多增加工艺复杂性和生产成本。",
+        "- 发热量下限规则：大型电站锅炉用煤Qnet,ar≥23MJ/kg（≈5500kcal）；中小型锅炉≥18.82MJ/kg（≈4500kcal）。",
+        "- 灰分对热效率影响规则：灰分每增加10%，锅炉热效率下降约3-4%；灰分≤30%时热效率可维持在76%以上。",
+        "- 水分均匀性规则：水分过高影响混合均匀性和热效率；水分过低碳粉飞扬损失大；需控制各煤种水分差。",
+        "\n【参考案例】",
+        "- 酒钢宏晟准东煤掺烧案例：强结焦煤掺烧比从17%经分阶段优化提升至68%，通过一炉一策和二次风调整实现安全纯烧。",
+        "- 张家口热电四煤种配比0:2:5:3案例：配煤价格较设计煤种低43元/吨，年节约约1800万元，锅炉效率仅下降0.5个百分点。",
+        "- 曲靖电厂叠加配煤案例：4000kcal稳燃煤+3000kcal低质煤叠加配煤，年掺烧低质煤约98万吨，降本6048万元。",
+        "- 大唐云冈300MW现货配煤案例：深度配烧模型使燃料成本下降3.47%，年节约6800万元，代价是厂用电率增高0.645%。",
+        "\n【RAG知识摘录】",
+        "- GB/T 25960-2010《动力配煤规范》2011年6月1日实施，含5条强制性条款，适用于电站锅炉、工业锅炉和工业窑炉。",
+        "- 煤质指标中灰分、硫分、水分、挥发分、发热量均可按配比线性加权计算；灰熔点（ST/FT）具有非线性特征，需用BP神经网络等方法预测。",
+        "- 不同煤田中：鄂尔多斯煤田煤质最优良（低灰低硫）；山西煤田煤种最全；准东煤高钠特性限制纯烧；西南煤田硫分偏高（部分>3%）。",
+    ]
+
+
 def _public_item_reason(material: dict[str, object | None], scenario: dict[str, object | None]) -> str:
+    name = str(material.get("name") or "")
     reasons = []
-    if _num(material.get("sulfurContent")) <= _num(scenario.get("targetSulfur")):
-        reasons.append("硫分低于订单上限")
-    if _num(material.get("calorificValue")) >= _num(scenario.get("targetCalorific")):
-        reasons.append("热值可支撑订单要求")
-    if _num(material.get("ashContent")) <= _num(scenario.get("targetAsh")):
-        reasons.append("灰分处于可控范围")
-    if not reasons:
-        reasons.append("作为调节煤种参与，需控制比例")
-    return "，".join(reasons)
+    sulfur = _num(material.get("sulfurContent"))
+    calorific = _num(material.get("calorificValue"))
+    ash = _num(material.get("ashContent"))
+    moisture = _num(material.get("moistureContent"))
+    cost = _num(material.get("unitCost"))
+    target_s = _num(scenario.get("targetSulfur"))
+    target_cv = _num(scenario.get("targetCalorific"))
+    target_ash = _num(scenario.get("targetAsh"))
+    target_mt = _num(scenario.get("targetMoisture"))
+
+    if sulfur <= target_s * 0.5:
+        reasons.append(f"硫分({sulfur:.2f}%)远低于订单上限")
+    elif sulfur <= target_s:
+        reasons.append(f"硫分({sulfur:.2f}%)满足订单要求")
+    elif sulfur <= target_s * 1.5:
+        reasons.append(f"硫分({sulfur:.2f}%)略高，需搭配低硫煤")
+    else:
+        reasons.append(f"硫分({sulfur:.2f}%)偏高，控制掺配比例")
+
+    if calorific >= target_cv * 1.1:
+        reasons.append(f"热值({calorific:.0f}kcal)高，可作提热主力")
+    elif calorific >= target_cv:
+        reasons.append(f"热值({calorific:.0f}kcal)达标")
+    elif calorific >= target_cv * 0.85:
+        reasons.append(f"热值({calorific:.0f}kcal)偏低，需高热值煤补充")
+    else:
+        reasons.append(f"热值({calorific:.0f}kcal)低，少量用于降本")
+
+    if ash <= target_ash * 0.6:
+        reasons.append(f"灰分({ash:.1f}%)极低，有利拉低配煤灰分")
+    elif ash <= target_ash:
+        reasons.append(f"灰分({ash:.1f}%)在目标范围内")
+    if moisture > target_mt and target_mt > 0:
+        reasons.append(f"水分({moisture:.1f}%)超限，限制配比")
+    if cost <= 300:
+        reasons.append(f"成本低({cost:.0f}元/吨)，降本效果好")
+    elif cost >= 700:
+        reasons.append(f"单价较高({cost:.0f}元/吨)，适量使用控制总成本")
+
+    return "；".join(reasons[:4])
