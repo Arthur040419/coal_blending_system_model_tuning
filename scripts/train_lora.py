@@ -61,6 +61,24 @@ def detect_device() -> str:
     return "cpu"
 
 
+def _print_pytorch_gpu_diagnostics() -> None:
+    """Help when a machine has an NVIDIA GPU but this process still uses CPU (wrong PyTorch wheel, driver, etc.)."""
+    cver = torch.version.cuda
+    print("PyTorch GPU diagnostics (if you have an NVIDIA GPU but see cpu above):")
+    print(f"  torch.__version__         = {torch.__version__}")
+    print(
+        f"  torch.version.cuda         = {cver!r}"
+        + (
+            "  -> None usually means a CPU-only PyTorch install; reinstall torch with CUDA (see https://pytorch.org)."
+            if cver is None
+            else ""
+        )
+    )
+    print(f"  torch.cuda.is_available()  = {torch.cuda.is_available()}")
+    if cver is not None and not torch.cuda.is_available():
+        print("  (CUDA build present but GPU not available: update NVIDIA driver, or check `nvidia-smi` in a terminal.)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a LoRA adapter for coal blending.")
     parser.add_argument("--config", default="configs/qwen_lora.yaml")
@@ -69,6 +87,8 @@ def main() -> None:
 
     device = detect_device()
     print(f"Detected device: {device}")
+    if device == "cpu":
+        _print_pytorch_gpu_diagnostics()
     if device == "cpu" and not cfg.get("allow_cpu_training", False):
         raise SystemExit(
             "No CUDA/MPS device is available. Refusing to train on CPU by default because Qwen LoRA "

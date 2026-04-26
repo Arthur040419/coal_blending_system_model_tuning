@@ -1,0 +1,37 @@
+# 本机无 NVIDIA GPU / 无 MPS 时，仅作流程烟测。训练极慢，不适合正式调参。
+# 使用方式:
+#   python scripts/train_lora.py --config configs/qwen_lora_cpu_smoke.yaml
+model_name_or_path: Qwen/Qwen2.5-1.5B-Instruct
+train_file: data/processed/train.jsonl
+eval_file: data/processed/eval.jsonl
+output_dir: outputs/adapters/qwen-coal-lora-cpu-smoke
+
+max_seq_length: 1024
+num_train_epochs: 1
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 2
+learning_rate: 0.0002
+warmup_ratio: 0.03
+logging_steps: 1
+eval_steps: 5
+save_steps: 5
+
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.05
+target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+use_4bit: false
+bf16: false
+
+assistant_only_loss: false
+
+allow_cpu_training: true
