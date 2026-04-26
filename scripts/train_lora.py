@@ -5,6 +5,27 @@ import argparse
 import sys
 from pathlib import Path
 
+# trl 在 import 时会用 Path.read_text() 读 UTF-8 的 .jinja 模板，不指定 encoding。
+# 在中文 Windows 上默认编码为 GBK，会触发 UnicodeDecodeError；必须在导入 trl 之前打补丁。
+def _patch_path_read_text_default_utf8() -> None:
+    import pathlib
+
+    _orig = pathlib.Path.read_text
+
+    def _read_text(self: pathlib.Path, *args: object, **kwargs: object) -> str:
+        if args and args[0] is not None:
+            return _orig(self, *args, **kwargs)
+        if args:  # encoding passed as first positional and is None
+            return _orig(self, "utf-8", *args[1:], **kwargs)
+        if "encoding" in kwargs and kwargs["encoding"] is not None:
+            return _orig(self, **kwargs)
+        return _orig(self, **{**kwargs, "encoding": "utf-8"})
+
+    pathlib.Path.read_text = _read_text  # type: ignore[assignment]
+
+
+_patch_path_read_text_default_utf8()
+
 import torch
 import yaml
 from datasets import load_dataset
