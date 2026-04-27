@@ -1,6 +1,7 @@
 # LoRA fine-tuning config for coal blending model
-# Target: Qwen3-4B-Instruct (Ollama qwen3:4b's HuggingFace source)
-model_name_or_path: Qwen/Qwen3-4B-Instruct
+# HuggingFace 上 4B Instruct 权重为 Qwen3-4B-Instruct-2507（无 Qwen3-4B-Instruct 此仓库名）
+# Ollama 侧 tag 如 qwen3:4b 与 HF 源可能命名不同，以各自文档为准
+model_name_or_path: Qwen/Qwen3-4B-Instruct-2507
 train_file: data/processed/train.jsonl
 eval_file: data/processed/eval.jsonl
 output_dir: outputs/adapters/qwen-coal-lora
