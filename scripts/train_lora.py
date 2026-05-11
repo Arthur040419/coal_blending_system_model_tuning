@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -39,18 +40,29 @@ try:
     from trl import SFTConfig, SFTTrainer
 except ModuleNotFoundError as exc:
     missing = exc.name or str(exc)
-    raise SystemExit(
-        f"Missing Python dependency: {missing}\n"
-        "Run this script from the project virtual environment:\n"
-        "  source .venv/bin/activate\n"
-        "  python scripts/train_lora.py --config configs/qwen_lora.yaml\n"
-        "or run it directly with:\n"
-        "  .venv/bin/python scripts/train_lora.py --config configs/qwen_lora.yaml\n"
-        "If the virtual environment is not installed yet, run:\n"
-        "  python3 -m venv .venv\n"
-        "  source .venv/bin/activate\n"
-        "  pip install -r requirements.txt"
-    ) from exc
+    if os.name == "nt":
+        commands = (
+            "PowerShell:\n"
+            "  py -m venv .venv\n"
+            "  .\\.venv\\Scripts\\Activate.ps1\n"
+            "  python -m pip install --upgrade pip\n"
+            "  pip install -r requirements.txt\n"
+            "  python scripts/train_lora.py --config configs/qwen_lora.yaml\n"
+            "or run it directly with:\n"
+            "  .\\.venv\\Scripts\\python.exe scripts\\train_lora.py --config configs\\qwen_lora.yaml"
+        )
+    else:
+        commands = (
+            "macOS/Linux:\n"
+            "  python3 -m venv .venv\n"
+            "  source .venv/bin/activate\n"
+            "  python -m pip install --upgrade pip\n"
+            "  pip install -r requirements.txt\n"
+            "  python scripts/train_lora.py --config configs/qwen_lora.yaml\n"
+            "or run it directly with:\n"
+            "  .venv/bin/python scripts/train_lora.py --config configs/qwen_lora.yaml"
+        )
+    raise SystemExit(f"Missing Python dependency: {missing}\n{commands}") from exc
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))

@@ -27,9 +27,21 @@ src/coal_tuning/         可复用的数据和提示词代码
 
 建议使用独立虚拟环境：
 
+macOS/Linux：
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Windows PowerShell：
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
