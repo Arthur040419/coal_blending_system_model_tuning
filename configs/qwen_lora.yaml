@@ -1,7 +1,7 @@
 # LoRA fine-tuning config for coal blending model.
 # Ollama 的 qwen2.5:1.5b 对应 HuggingFace 训练权重通常使用 Qwen/Qwen2.5-1.5B-Instruct。
 # Ollama tag 不能直接作为 transformers 的 model_name_or_path 使用。
-model_name_or_path: Qwen/Qwen2.5-1.5B-Instruct
+model_name_or_path: D:\models\Qwen2.5-1.5B-Instruct
 train_file: data/processed/train.jsonl
 eval_file: data/processed/eval.jsonl
 output_dir: outputs/adapters/qwen2.5-1.5b-coal-lora

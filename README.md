@@ -45,6 +45,13 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+如果 PowerShell 禁止激活脚本，可在当前窗口临时放开策略：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
 如果使用 QLoRA 且机器支持 CUDA，可额外安装：
 
 ```bash
@@ -101,6 +108,33 @@ python3 scripts/train_lora.py --config configs/qwen_lora.yaml
 
 ```bash
 .venv/bin/python scripts/train_lora.py --config configs/qwen_lora.yaml
+```
+
+### HuggingFace 下载超时
+
+训练首次运行会从 HuggingFace 下载 `Qwen/Qwen2.5-1.5B-Instruct`。如果 Windows 上出现 `WinError 10060`、`Read timed out` 或一直重试，说明网络无法稳定访问 HuggingFace。可选择以下任一方式：
+
+方式一：在 PowerShell 中为当前窗口设置代理后重新训练：
+
+```powershell
+$env:HTTP_PROXY="http://127.0.0.1:7890"
+$env:HTTPS_PROXY="http://127.0.0.1:7890"
+python scripts/train_lora.py --config configs/qwen_lora.yaml
+```
+
+其中端口需要改成你本机代理软件实际提供的 HTTP 端口。
+
+方式二：先把模型下载到本地，再把 `configs/qwen_lora.yaml` 中的 `model_name_or_path` 改成本地目录：
+
+```powershell
+hf download Qwen/Qwen2.5-1.5B-Instruct `
+  --local-dir D:\models\Qwen2.5-1.5B-Instruct
+```
+
+然后修改：
+
+```yaml
+model_name_or_path: D:\models\Qwen2.5-1.5B-Instruct
 ```
 
 训练产物默认输出到：
