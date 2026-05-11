@@ -76,23 +76,25 @@ python3 scripts/build_dataset.py --tasks explanation
 
 ## 训练 LoRA
 
-先根据机器配置修改 `configs/qwen_lora.yaml` 中的 `model_name_or_path`。
-
-轻量实验建议从小模型开始，例如：
-
-- `Qwen/Qwen2.5-1.5B-Instruct`
-- `Qwen/Qwen2.5-3B-Instruct`
+默认基座模型已经配置为 `Qwen/Qwen2.5-1.5B-Instruct`，对应 Ollama 侧常用 tag `qwen2.5:1.5b`。注意：`qwen2.5:1.5b` 是 Ollama tag，不能直接作为 transformers 训练脚本的 `model_name_or_path`。
 
 训练命令：
 
 ```bash
+source .venv/bin/activate
 python3 scripts/train_lora.py --config configs/qwen_lora.yaml
+```
+
+如果不想激活虚拟环境，也可以直接执行：
+
+```bash
+.venv/bin/python scripts/train_lora.py --config configs/qwen_lora.yaml
 ```
 
 训练产物默认输出到：
 
 ```text
-outputs/adapters/qwen-coal-lora/
+outputs/adapters/qwen2.5-1.5b-coal-lora/
 ```
 
 该目录可能很大，已在 `.gitignore` 中忽略。
@@ -138,7 +140,7 @@ python3 scripts/evaluate_json_outputs.py \
 ```bash
 python3 scripts/evaluate_json_outputs.py \
   --base-model Qwen/Qwen2.5-1.5B-Instruct \
-  --adapter outputs/adapters/qwen-coal-lora \
+  --adapter outputs/adapters/qwen2.5-1.5b-coal-lora \
   --limit 20 \
   --report-file outputs/reports/lora_eval_report.json
 ```
@@ -168,10 +170,25 @@ python3 scripts/plot_quality_radar.py \
 1. 将 LoRA 合并到基座模型，再转换为 Ollama 可运行格式。
 2. 使用兼容 OpenAI Chat Completions 的推理服务加载基座模型和 LoRA adapter。
 
+合并 LoRA：
+
+```bash
+python3 merge_lora.py \
+  --base-model Qwen/Qwen2.5-1.5B-Instruct \
+  --adapter outputs/adapters/qwen2.5-1.5b-coal-lora \
+  --output outputs/merged/qwen2.5-1.5b-coal-merged
+```
+
+生成 Ollama Modelfile 模板时，默认基座为 `qwen2.5:1.5b`：
+
+```bash
+python3 scripts/make_ollama_modelfile.py --output outputs/merged/Modelfile
+```
+
 主系统只需要在 `model_config` 表中新增或启用一条配置：
 
 ```text
-model_name: qwen-coal-lora
+model_name: qwen2.5-1.5b-coal-lora
 model_type: LOCAL_OLLAMA 或 LLM
 api_url: http://127.0.0.1:11434/v1/chat/completions
 status: 1

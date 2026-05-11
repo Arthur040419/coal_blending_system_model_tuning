@@ -26,16 +26,31 @@ def _patch_path_read_text_default_utf8() -> None:
 
 _patch_path_read_text_default_utf8()
 
-import torch
-import yaml
-from datasets import load_dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-)
-from trl import SFTConfig, SFTTrainer
+try:
+    import torch
+    import yaml
+    from datasets import load_dataset
+    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    from transformers import (
+        AutoModelForCausalLM,
+        AutoTokenizer,
+        BitsAndBytesConfig,
+    )
+    from trl import SFTConfig, SFTTrainer
+except ModuleNotFoundError as exc:
+    missing = exc.name or str(exc)
+    raise SystemExit(
+        f"Missing Python dependency: {missing}\n"
+        "Run this script from the project virtual environment:\n"
+        "  source .venv/bin/activate\n"
+        "  python scripts/train_lora.py --config configs/qwen_lora.yaml\n"
+        "or run it directly with:\n"
+        "  .venv/bin/python scripts/train_lora.py --config configs/qwen_lora.yaml\n"
+        "If the virtual environment is not installed yet, run:\n"
+        "  python3 -m venv .venv\n"
+        "  source .venv/bin/activate\n"
+        "  pip install -r requirements.txt"
+    ) from exc
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))

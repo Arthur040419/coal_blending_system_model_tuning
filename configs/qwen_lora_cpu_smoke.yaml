@@ -4,7 +4,7 @@
 model_name_or_path: Qwen/Qwen2.5-1.5B-Instruct
 train_file: data/processed/train.jsonl
 eval_file: data/processed/eval.jsonl
-output_dir: outputs/adapters/qwen-coal-lora-cpu-smoke
+output_dir: outputs/adapters/qwen2.5-1.5b-coal-lora-cpu-smoke
 
 max_seq_length: 1024
 num_train_epochs: 1

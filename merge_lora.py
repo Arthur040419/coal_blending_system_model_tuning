@@ -1,46 +1,96 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import PeftModel
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
 import torch
-import os
+from peft import PeftModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-base_model_path = r"D:\models\Qwen3-4B-Instruct-2507"
-adapter_path = r"D:\code\graduation_project\coal_blending_system_model_tuning\outputs\adapters\qwen-coal-lora"
-merged_model_path = r"D:\code\graduation_project\coal_blending_system_model_tuning\outputs\merged\qwen3-coal-merged"
+ROOT = Path(__file__).resolve().parent
 
-os.makedirs(merged_model_path, exist_ok=True)
 
-print("正在加载 tokenizer...")
-tokenizer = AutoTokenizer.from_pretrained(
-    base_model_path,
-    trust_remote_code=True,
-    local_files_only=True
-)
+def resolve_path(value: str | Path) -> str:
+    path = Path(value)
+    return str(path if path.is_absolute() else ROOT / path)
 
-print("正在加载基础模型...")
-base_model = AutoModelForCausalLM.from_pretrained(
-    base_model_path,
-    torch_dtype=torch.float16,
-    device_map="auto",
-    trust_remote_code=True,
-    local_files_only=True
-)
 
-print("正在加载 LoRA adapter...")
-model = PeftModel.from_pretrained(
-    base_model,
-    adapter_path,
-    local_files_only=True
-)
+def default_dtype() -> torch.dtype:
+    if torch.cuda.is_available() or torch.backends.mps.is_available():
+        return torch.float16
+    return torch.float32
 
-print("正在合并 LoRA...")
-model = model.merge_and_unload()
 
-print("正在保存合并后的模型...")
-model.save_pretrained(
-    merged_model_path,
-    safe_serialization=True
-)
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Merge the coal LoRA adapter into the Qwen base model.")
+    parser.add_argument(
+        "--base-model",
+        default="Qwen/Qwen2.5-1.5B-Instruct",
+        help="HuggingFace model id or local base-model path.",
+    )
+    parser.add_argument(
+        "--adapter",
+        default="outputs/adapters/qwen2.5-1.5b-coal-lora",
+        help="LoRA adapter directory.",
+    )
+    parser.add_argument(
+        "--output",
+        default="outputs/merged/qwen2.5-1.5b-coal-merged",
+        help="Directory for the merged model.",
+    )
+    parser.add_argument(
+        "--local-files-only",
+        action="store_true",
+        help="Only load files that already exist locally.",
+    )
+    args = parser.parse_args()
 
-tokenizer.save_pretrained(merged_model_path)
+    adapter_path = resolve_path(args.adapter)
+    output_path = resolve_path(args.output)
+    Path(output_path).mkdir(parents=True, exist_ok=True)
 
-print("LoRA 合并完成：", merged_model_path)
+    dtype = default_dtype()
+    if torch.cuda.is_available():
+        device_map = "auto"
+    elif torch.backends.mps.is_available():
+        device_map = {"": "mps"}
+    else:
+        device_map = None
+
+    print("正在加载 tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.base_model,
+        trust_remote_code=True,
+        local_files_only=args.local_files_only,
+        use_fast=True,
+    )
+
+    print("正在加载基础模型...")
+    base_model = AutoModelForCausalLM.from_pretrained(
+        args.base_model,
+        torch_dtype=dtype,
+        device_map=device_map,
+        trust_remote_code=True,
+        local_files_only=args.local_files_only,
+    )
+
+    print("正在加载 LoRA adapter...")
+    model = PeftModel.from_pretrained(
+        base_model,
+        adapter_path,
+        local_files_only=args.local_files_only,
+    )
+
+    print("正在合并 LoRA...")
+    model = model.merge_and_unload()
+
+    print("正在保存合并后的模型...")
+    model.save_pretrained(output_path, safe_serialization=True)
+    tokenizer.save_pretrained(output_path)
+
+    print("LoRA 合并完成：", output_path)
+
+
+if __name__ == "__main__":
+    main()
