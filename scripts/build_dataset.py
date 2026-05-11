@@ -23,7 +23,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--sql",
-        default="../coal_blending_system/db/coal_blending_system_2026-04-26.sql",
+        default="../coal_blending_system/db/coal_blending_system_2026-05-11.sql",
         help="Path to the coal_blending_system MySQL dump.",
     )
     parser.add_argument(
