@@ -207,7 +207,7 @@ tempCodeRunnerFile.py
 .ruff_cache/
 
 # Model tuning artifacts
-outputs/adapters/**
+#outputs/adapters/**
 !outputs/adapters/.gitkeep
 *.safetensors
 *.bin

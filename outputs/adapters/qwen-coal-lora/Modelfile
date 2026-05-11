@@ -1,0 +1,5 @@
+FROM qwen3:4b
+
+ADAPTER D:\code\graduation_project\coal_blending_system_model_tuning\outputs\adapters\qwen-coal-lora
+
+SYSTEM "You are a coal blending assistant."
