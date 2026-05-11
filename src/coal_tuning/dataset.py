@@ -191,7 +191,7 @@ def build_public_candidate_generation_records(samples: list[dict[str, object | N
     for scenario in scenarios:
         materials = public_samples_to_materials(cleaned)
         plans = build_public_candidate_plans(scenario, materials)
-        if not plans:
+        if len(plans) < 3:
             continue
         context = build_public_candidate_context(scenario, materials)
         output = {"plans": plans}
@@ -222,7 +222,7 @@ def _build_all_public_scenarios() -> list[dict[str, object | None]]:
     Each scenario maps to a real-world blending pattern documented in industry papers
     (see CSV source_url fields for references).
     """
-    return [
+    base_scenarios = [
         # ── Case 1: 低硫环保电煤 — 神木+大同经典搭配 ──────────
         {
             "id": "public-low-sulfur-power",
@@ -341,6 +341,124 @@ def _build_all_public_scenarios() -> list[dict[str, object | None]]:
             "strategy": "冬季保供大需求；3-4种煤分摊库存压力；大同煤/平朔煤做主力（库存量大），神木煤/东胜煤补质量。",
         },
     ]
+    return _expand_public_scenarios(base_scenarios)
+
+
+def _expand_public_scenarios(base_scenarios: list[dict[str, object | None]]) -> list[dict[str, object | None]]:
+    """Build order variants so candidate generation learns different business priorities.
+
+    The coal quality rows are public/source-backed, while these scenarios are
+    controlled synthetic order variants.  They keep targets inside realistic
+    steam-coal/coking-coal ranges and are validated again when plans are built.
+    """
+    variants = [
+        {
+            "suffix": "base",
+            "name": "基准",
+            "demand_factor": 1.0,
+            "ash_factor": 1.0,
+            "sulfur_factor": 1.0,
+            "moisture_factor": 1.0,
+            "calorific_factor": 1.0,
+            "priority_delta": 0,
+            "strategy": "基准订单，优先满足全部质量约束。",
+        },
+        {
+            "suffix": "quality-margin",
+            "name": "质量余量",
+            "demand_factor": 0.8,
+            "ash_factor": 0.88,
+            "sulfur_factor": 0.85,
+            "moisture_factor": 0.92,
+            "calorific_factor": 1.03,
+            "priority_delta": 1,
+            "strategy": "质量余量优先，降低灰分、硫分和水分风险。",
+        },
+        {
+            "suffix": "cost-tolerant",
+            "name": "成本优先",
+            "demand_factor": 1.2,
+            "ash_factor": 1.12,
+            "sulfur_factor": 1.15,
+            "moisture_factor": 1.10,
+            "calorific_factor": 0.97,
+            "priority_delta": -1,
+            "strategy": "成本优先，在达标前提下提高低价煤利用比例。",
+        },
+        {
+            "suffix": "high-heat",
+            "name": "高热值",
+            "demand_factor": 0.75,
+            "ash_factor": 0.95,
+            "sulfur_factor": 1.00,
+            "moisture_factor": 0.95,
+            "calorific_factor": 1.08,
+            "priority_delta": 1,
+            "strategy": "热值优先，用高热值煤补偿低热值或高水分煤。",
+        },
+        {
+            "suffix": "large-volume",
+            "name": "保供",
+            "demand_factor": 1.55,
+            "ash_factor": 1.08,
+            "sulfur_factor": 1.08,
+            "moisture_factor": 1.05,
+            "calorific_factor": 0.98,
+            "priority_delta": 0,
+            "strategy": "保供优先，使用3-4种库存充足物料分摊用量。",
+        },
+        {
+            "suffix": "water-strict",
+            "name": "水分严格",
+            "demand_factor": 0.9,
+            "ash_factor": 1.00,
+            "sulfur_factor": 1.00,
+            "moisture_factor": 0.82,
+            "calorific_factor": 1.02,
+            "priority_delta": 1,
+            "strategy": "水分严格，限制准东等高水分煤掺配比例。",
+        },
+        {
+            "suffix": "sulfur-strict",
+            "name": "硫分严格",
+            "demand_factor": 0.85,
+            "ash_factor": 1.00,
+            "sulfur_factor": 0.72,
+            "moisture_factor": 1.00,
+            "calorific_factor": 1.01,
+            "priority_delta": 1,
+            "strategy": "硫分严格，高硫煤禁用或只可极低比例参与。",
+        },
+    ]
+
+    expanded: list[dict[str, object | None]] = []
+    for base in base_scenarios:
+        for variant in variants:
+            scenario = dict(base)
+            scenario["id"] = f"{base['id']}-{variant['suffix']}"
+            scenario["orderCode"] = f"{base['orderCode']}-{str(variant['suffix']).upper()}"
+            scenario["customerName"] = f"{base['customerName']}（{variant['name']}）"
+            scenario["demandQuantity"] = round(_num(base.get("demandQuantity")) * float(variant["demand_factor"]), 0)
+            scenario["targetAsh"] = round(
+                min(26.0, max(6.0, _num(base.get("targetAsh")) * float(variant["ash_factor"]))),
+                2,
+            )
+            scenario["targetSulfur"] = round(
+                min(1.8, max(0.20, _num(base.get("targetSulfur")) * float(variant["sulfur_factor"]))),
+                3,
+            )
+            scenario["targetMoisture"] = round(
+                min(20.0, max(6.0, _num(base.get("targetMoisture")) * float(variant["moisture_factor"]))),
+                2,
+            )
+            scenario["targetCalorific"] = round(
+                min(7200.0, max(4300.0, _num(base.get("targetCalorific")) * float(variant["calorific_factor"]))),
+                0,
+            )
+            scenario["priorityLevel"] = int(min(5, max(1, _num(base.get("priorityLevel")) + int(variant["priority_delta"]))))
+            scenario["strategy"] = f"{base['strategy']} {variant['strategy']}"
+            expanded.append(scenario)
+    return expanded
 
 
 def split_and_write(
@@ -660,38 +778,58 @@ def build_public_candidate_plans(
 ) -> list[dict[str, Any]]:
     by_batch = {str(m["productBatchNo"]): m for m in materials}
 
-    # All 2-material and 3-material combinations (excluding BMK-SEAM-1 junk coal).
-    premium_batches = [
-        f"PUBLIC-{i:03d}" for i in range(1, len(by_batch) + 1)
-    ]
+    public_batches = [f"PUBLIC-{i:03d}" for i in range(1, len(by_batch) + 1)]
     combos: list[list[tuple[str, float]]] = []
 
-    # 2-coal combos: 60/40, 50/50, 40/60
-    for i, a in enumerate(premium_batches):
-        for b in premium_batches[i + 1 :]:
-            for r1, r2 in [(0.6, 0.4), (0.5, 0.5), (0.4, 0.6)]:
+    # 2-coal combos: 20/80 through 80/20.
+    for i, a in enumerate(public_batches):
+        for b in public_batches[i + 1 :]:
+            for r1 in [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]:
+                r2 = round(1.0 - r1, 4)
                 combos.append([(a, r1), (b, r2)])
 
-    # 3-coal combos: 50/30/20, 40/40/20, 40/30/30, 50/25/25
-    for i, a in enumerate(premium_batches):
-        for j, b in enumerate(premium_batches[i + 1 :], i + 1):
-            for c in premium_batches[j + 1 :]:
-                for r1, r2, r3 in [(0.5, 0.3, 0.2), (0.4, 0.4, 0.2), (0.4, 0.3, 0.3), (0.5, 0.25, 0.25)]:
+    # 3-coal combos: common operation-friendly ratios.
+    for i, a in enumerate(public_batches):
+        for j, b in enumerate(public_batches[i + 1 :], i + 1):
+            for c in public_batches[j + 1 :]:
+                for r1, r2, r3 in [
+                    (0.5, 0.3, 0.2),
+                    (0.4, 0.4, 0.2),
+                    (0.4, 0.3, 0.3),
+                    (0.6, 0.2, 0.2),
+                    (0.5, 0.25, 0.25),
+                    (0.7, 0.2, 0.1),
+                ]:
                     combos.append([(a, r1), (b, r2), (c, r3)])
 
-    plans: list[dict[str, Any]] = []
-    used_signatures: set[str] = set()
+    # 4-coal combos are useful for large-volume orders to distribute stock.
+    for i, a in enumerate(public_batches):
+        for j, b in enumerate(public_batches[i + 1 :], i + 1):
+            for k, c in enumerate(public_batches[j + 1 :], j + 1):
+                for d in public_batches[k + 1 :]:
+                    for r1, r2, r3, r4 in [
+                        (0.4, 0.25, 0.2, 0.15),
+                        (0.35, 0.25, 0.25, 0.15),
+                        (0.3, 0.3, 0.2, 0.2),
+                    ]:
+                        combos.append([(a, r1), (b, r2), (c, r3), (d, r4)])
+
+    candidates: dict[str, tuple[float, list[tuple[dict[str, object | None], float]], dict[str, float]]] = {}
     for combo in combos:
         selected = [(by_batch[b], r) for b, r in combo if b in by_batch]
         if len(selected) < 2:
             continue
         metrics = _weighted_public_metrics(selected)
-        if not _public_plan_reasonable(scenario, metrics):
+        if not _public_plan_reasonable(scenario, selected, metrics):
             continue
-        sig = _combo_signature(selected)
-        if sig in used_signatures:
-            continue
-        used_signatures.add(sig)
+        sig = _material_set_signature(selected)
+        score = _public_plan_score(scenario, selected, metrics)
+        if sig not in candidates or score > candidates[sig][0]:
+            candidates[sig] = (score, selected, metrics)
+
+    ranked = sorted(candidates.values(), key=lambda x: x[0], reverse=True)[:5]
+    plans: list[dict[str, Any]] = []
+    for _, selected, metrics in ranked:
         items = [
             {
                 "coalId": _to_int(m["coalId"]),
@@ -712,14 +850,13 @@ def build_public_candidate_plans(
                 "strategy": (
                     f"{scenario['strategy']} 加权预测灰分{metrics['ash']:.2f}%、"
                     f"硫分{metrics['sulfur']:.2f}%、水分{metrics['moisture']:.2f}%、"
-                    f"热值{metrics['calorific']:.0f} kcal/kg。"
+                    f"热值{metrics['calorific']:.0f} kcal/kg，"
+                    f"吨煤成本约{_weighted_public_cost(selected):.0f}元。"
                 ),
                 "items": items,
-                "risk": "公开样本来自文献或数据库摘要，实际执行前需用企业入厂煤质检测值复核。",
+                "risk": _public_plan_risk(scenario, selected, metrics),
             }
         )
-        if len(plans) >= 3:
-            break
     return plans
 
 
@@ -882,6 +1019,10 @@ def _combo_signature(selected: list[tuple[dict[str, object | None], float]]) -> 
     return "|".join(f"{k}:{v}" for k, v in parts)
 
 
+def _material_set_signature(selected: list[tuple[dict[str, object | None], float]]) -> str:
+    return "|".join(sorted(str(m.get("productBatchNo") or m.get("coalId")) for m, _ in selected))
+
+
 def _weighted_public_metrics(selected: list[tuple[dict[str, object | None], float]]) -> dict[str, float]:
     return {
         "ash": sum(_num(m.get("ashContent")) * r for m, r in selected),
@@ -891,13 +1032,108 @@ def _weighted_public_metrics(selected: list[tuple[dict[str, object | None], floa
     }
 
 
-def _public_plan_reasonable(scenario: dict[str, object | None], metrics: dict[str, float]) -> bool:
-    return (
-        metrics["ash"] <= _num(scenario.get("targetAsh")) * 1.15
-        and metrics["sulfur"] <= _num(scenario.get("targetSulfur")) * 1.20
-        and metrics["moisture"] <= _num(scenario.get("targetMoisture")) * 1.35
-        and metrics["calorific"] >= _num(scenario.get("targetCalorific")) * 0.90
-    )
+def _weighted_public_cost(selected: list[tuple[dict[str, object | None], float]]) -> float:
+    return sum(_num(m.get("unitCost")) * r for m, r in selected)
+
+
+def _public_plan_reasonable(
+    scenario: dict[str, object | None],
+    selected: list[tuple[dict[str, object | None], float]],
+    metrics: dict[str, float],
+) -> bool:
+    demand = _num(scenario.get("demandQuantity"))
+    target_ash = _num(scenario.get("targetAsh"))
+    target_sulfur = _num(scenario.get("targetSulfur"))
+    target_moisture = _num(scenario.get("targetMoisture"))
+    target_calorific = _num(scenario.get("targetCalorific"))
+
+    if not (
+        metrics["ash"] <= target_ash
+        and metrics["sulfur"] <= target_sulfur
+        and metrics["moisture"] <= target_moisture
+        and metrics["calorific"] >= target_calorific
+    ):
+        return False
+
+    for material, ratio in selected:
+        if demand > 0 and _num(material.get("availableQuantity")) < demand * ratio:
+            return False
+        if _num(material.get("sulfurContent")) > 2.0 and ratio > 0.10:
+            return False
+
+    return _public_volatile_reasonable(selected)
+
+
+def _public_volatile_reasonable(selected: list[tuple[dict[str, object | None], float]]) -> bool:
+    volatiles = [_num(m.get("volatileContent")) for m, _ in selected if m.get("volatileContent") not in (None, "")]
+    if len(volatiles) < 2 or max(volatiles) - min(volatiles) < 15.0:
+        return True
+    low_volatile_ratio = sum(r for m, r in selected if _num(m.get("volatileContent")) <= 12.0)
+    return low_volatile_ratio <= 0.20
+
+
+def _public_plan_score(
+    scenario: dict[str, object | None],
+    selected: list[tuple[dict[str, object | None], float]],
+    metrics: dict[str, float],
+) -> float:
+    target_ash = _num(scenario.get("targetAsh"))
+    target_sulfur = _num(scenario.get("targetSulfur"))
+    target_moisture = _num(scenario.get("targetMoisture"))
+    target_calorific = _num(scenario.get("targetCalorific"))
+    priority = _num(scenario.get("priorityLevel"))
+    strategy = str(scenario.get("strategy") or "")
+
+    ash_margin = _bounded((target_ash - metrics["ash"]) / target_ash, 0.0, 0.45)
+    sulfur_margin = _bounded((target_sulfur - metrics["sulfur"]) / target_sulfur, 0.0, 0.45)
+    moisture_margin = _bounded((target_moisture - metrics["moisture"]) / target_moisture, 0.0, 0.45)
+    calorific_margin = _bounded((metrics["calorific"] - target_calorific) / target_calorific, 0.0, 0.30)
+    quality_score = 100.0 * (0.25 * ash_margin + 0.30 * sulfur_margin + 0.20 * moisture_margin + 0.25 * calorific_margin)
+
+    cost = _weighted_public_cost(selected)
+    cost_score = _bounded((760.0 - cost) / 5.8, 0.0, 100.0)
+
+    demand = _num(scenario.get("demandQuantity"))
+    inventory_score = 80.0
+    if demand > 0:
+        min_inventory_margin = min(
+            (_num(material.get("availableQuantity")) - demand * ratio) / demand
+            for material, ratio in selected
+        )
+        inventory_score = _bounded(50.0 + min_inventory_margin * 100.0, 0.0, 100.0)
+
+    material_count_bonus = 6.0 if len(selected) == 3 else 4.0 if len(selected) == 4 else 0.0
+    if priority >= 4 or "质量" in strategy or "硫分严格" in strategy:
+        return 0.58 * quality_score + 0.22 * cost_score + 0.20 * inventory_score + material_count_bonus
+    if priority <= 1 or "成本" in strategy:
+        return 0.42 * quality_score + 0.38 * cost_score + 0.20 * inventory_score + material_count_bonus
+    return 0.50 * quality_score + 0.28 * cost_score + 0.22 * inventory_score + material_count_bonus
+
+
+def _bounded(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(value, upper))
+
+
+def _public_plan_risk(
+    scenario: dict[str, object | None],
+    selected: list[tuple[dict[str, object | None], float]],
+    metrics: dict[str, float],
+) -> str:
+    risks = ["公开样本来自文献、标准或行业公开资料整理，执行前需用企业入厂煤质检测值复核。"]
+    target_sulfur = _num(scenario.get("targetSulfur"))
+    target_moisture = _num(scenario.get("targetMoisture"))
+    target_calorific = _num(scenario.get("targetCalorific"))
+    if target_sulfur > 0 and target_sulfur - metrics["sulfur"] <= 0.05:
+        risks.append("预测硫分接近上限，需保留低硫煤替代余量。")
+    if target_moisture > 0 and target_moisture - metrics["moisture"] <= 0.8:
+        risks.append("预测水分接近上限，应控制露天堆放和雨季含水波动。")
+    if target_calorific > 0 and metrics["calorific"] - target_calorific <= 120:
+        risks.append("热值余量较小，交付前应复核低位发热量。")
+    if any("准东" in str(material.get("name") or "") for material, _ in selected):
+        risks.append("含准东煤时需关注高钠导致的结渣沾污风险。")
+    if not _public_volatile_reasonable(selected):
+        risks.append("高低挥发分差值较大，应先做燃烧稳定性验证。")
+    return "".join(risks[:4])
 
 
 def _build_public_rules_context(scenario: dict[str, object | None]) -> list[str]:

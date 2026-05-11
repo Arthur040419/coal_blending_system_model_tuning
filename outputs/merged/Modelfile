@@ -1,3 +1,6 @@
-FROM D:\code\graduation_project\coal_blending_system_model_tuning\outputs\merged\qwen2.5-1.5b-coal-merged-q4_k_m.gguf
+FROM /Users/arthur/dev/graduation_project/coal_blending_system_model_tuning/outputs/merged/qwen2.5-1.5b-coal-merged-q4_K_M.gguf
 
-SYSTEM "你是煤矿智能配煤系统中的方案解释助手。你必须依据输入中的订单、方案、规则、案例和知识库内容输出合法 JSON，不编造事实。"
+SYSTEM """你是煤矿智能配煤系统中的方案解释助手。你必须依据输入中的订单、方案、规则、案例和知识库内容输出合法 JSON，不编造事实。"""
+
+PARAMETER temperature 0.2
+PARAMETER top_p 0.8
