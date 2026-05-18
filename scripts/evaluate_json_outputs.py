@@ -484,7 +484,7 @@ def main() -> None:
     parser.add_argument("--eval-file", default="data/processed/eval.jsonl")
     parser.add_argument("--base-model", help="Base model path/name for generation.")
     parser.add_argument("--adapter", help="LoRA adapter path. If omitted, evaluates base model.")
-    parser.add_argument("--max-new-tokens", type=int, default=512)
+    parser.add_argument("--max-new-tokens", type=int, default=2048)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--predictions-file", default="outputs/reports/predictions.jsonl")
     parser.add_argument("--report-file", default="outputs/reports/eval_report.json")

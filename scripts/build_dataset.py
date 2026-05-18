@@ -41,6 +41,35 @@ def main() -> None:
         default="all",
         help="Which task records to build.",
     )
+    parser.add_argument(
+        "--compact-candidate-context",
+        action="store_true",
+        help="Build shorter candidate-generation prompts and targets for LoRA training.",
+    )
+    parser.add_argument(
+        "--candidate-max-materials",
+        type=int,
+        default=8,
+        help="Maximum candidate materials kept in compact candidate-generation prompts.",
+    )
+    parser.add_argument(
+        "--candidate-max-rules",
+        type=int,
+        default=5,
+        help="Maximum rule snippets kept in compact candidate-generation prompts.",
+    )
+    parser.add_argument(
+        "--candidate-max-cases",
+        type=int,
+        default=3,
+        help="Maximum case snippets kept in compact candidate-generation prompts.",
+    )
+    parser.add_argument(
+        "--candidate-max-rag",
+        type=int,
+        default=3,
+        help="Maximum RAG snippets kept in compact candidate-generation prompts.",
+    )
     args = parser.parse_args()
 
     sql_path = (ROOT / args.sql).resolve() if not Path(args.sql).is_absolute() else Path(args.sql)
@@ -56,6 +85,11 @@ def main() -> None:
         public_samples=public_samples,
         include_explanation=args.tasks in ("all", "explanation"),
         include_candidate=args.tasks in ("all", "candidate"),
+        compact_candidate=args.compact_candidate_context,
+        candidate_max_materials=args.candidate_max_materials,
+        candidate_max_rules=args.candidate_max_rules,
+        candidate_max_cases=args.candidate_max_cases,
+        candidate_max_rag=args.candidate_max_rag,
     )
     if not records:
         raise SystemExit("No usable training records were generated. Check SQL dump content.")

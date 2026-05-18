@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import json
+import statistics
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 # trl 在 import 时会用 Path.read_text() 读 UTF-8 的 .jinja 模板，不指定 encoding。
 # 在中文 Windows 上默认编码为 GBK，会触发 UnicodeDecodeError；必须在导入 trl 之前打补丁。
@@ -80,6 +83,60 @@ def resolve_path(value: str | Path) -> str:
     return str(p if p.is_absolute() else ROOT / p)
 
 
+def resolve_model_name_or_path(value: str | Path) -> str:
+    raw = str(value)
+    # Keep HuggingFace ids and Windows drive paths untouched.
+    if "/" in raw and not raw.startswith(".") and not raw.startswith("/"):
+        return raw
+    if len(raw) >= 3 and raw[1:3] == ":\\":
+        return raw
+    p = Path(raw)
+    if p.is_absolute():
+        return raw
+    local = ROOT / p
+    return str(local) if local.exists() else raw
+
+
+def _exception_chain_contains(exc: BaseException, text: str) -> bool:
+    current: BaseException | None = exc
+    while current is not None:
+        if text in str(current):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _tokenizer_kwargs_for(model_name_or_path: str) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {"trust_remote_code": True, "use_fast": True}
+    cfg_path = Path(model_name_or_path) / "tokenizer_config.json"
+    if not cfg_path.exists():
+        return kwargs
+    try:
+        tokenizer_cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return kwargs
+    if isinstance(tokenizer_cfg.get("extra_special_tokens"), list):
+        # Some Qwen3 exports contain the old list form, while recent
+        # transformers expects a dict here. The tokens are already present in
+        # tokenizer.json; overriding this metadata avoids a loader crash.
+        kwargs["extra_special_tokens"] = {}
+    return kwargs
+
+
+def load_tokenizer(model_name_or_path: str):
+    kwargs = _tokenizer_kwargs_for(model_name_or_path)
+    try:
+        return AutoTokenizer.from_pretrained(model_name_or_path, **kwargs)
+    except Exception as exc:
+        if _exception_chain_contains(exc, "extra_special_tokens") or _exception_chain_contains(
+            exc, "object has no attribute 'keys'"
+        ):
+            retry_kwargs = {**kwargs, "extra_special_tokens": {}}
+            print("Retrying tokenizer load with extra_special_tokens={} for compatibility.")
+            return AutoTokenizer.from_pretrained(model_name_or_path, **retry_kwargs)
+        raise
+
+
 def detect_device() -> str:
     if torch.cuda.is_available():
         return "cuda"
@@ -106,17 +163,123 @@ def _print_pytorch_gpu_diagnostics() -> None:
         print("  (CUDA build present but GPU not available: update NVIDIA driver, or check `nvidia-smi` in a terminal.)")
 
 
+def filter_dataset_by_task(dataset: Any, task: str | None) -> Any:
+    if not task:
+        return dataset
+    print(f"Filtering dataset by task={task!r}")
+    filtered = dataset.filter(lambda row: row.get("task") == task)
+    for split, rows in filtered.items():
+        if len(rows) == 0:
+            raise SystemExit(f"No rows left in split {split!r} after filtering task={task!r}.")
+    return filtered
+
+
+def prepare_prompt_completion_dataset(dataset: Any) -> Any:
+    """Convert local JSONL rows to TRL prompt/completion format.
+
+    This avoids relying on Qwen chat-template assistant masks, which are absent in
+    several Qwen tokenizer releases. TRL will instead use completion_mask so loss
+    is applied only to the assistant answer.
+    """
+
+    def convert(row: dict[str, Any]) -> dict[str, Any]:
+        if row.get("prompt") and row.get("completion"):
+            return {"prompt": row["prompt"], "completion": row["completion"]}
+        messages = row.get("messages") or []
+        if len(messages) < 2:
+            raise ValueError(f"Row {row.get('id') or '<unknown>'} has no usable messages.")
+        assistant = messages[-1]
+        if assistant.get("role") != "assistant":
+            raise ValueError(f"Row {row.get('id') or '<unknown>'} must end with an assistant message.")
+        return {
+            "prompt": messages[:-1],
+            "completion": [assistant],
+        }
+
+    converted = {}
+    for split, rows in dataset.items():
+        converted[split] = rows.map(
+            convert,
+            remove_columns=rows.column_names,
+            desc=f"Converting {split} split to prompt/completion",
+        )
+    return dataset.__class__(converted)
+
+
+def print_and_validate_length_report(dataset: Any, tokenizer: Any, max_length: int, fail_on_truncation: bool) -> None:
+    print("Token length diagnostics:")
+    bad_splits: list[str] = []
+    for split, rows in dataset.items():
+        totals: list[int] = []
+        prompts: list[int] = []
+        completions: list[int] = []
+        truncating = 0
+        prompt_too_long = 0
+        for row in rows:
+            prompt_ids = tokenizer.apply_chat_template(
+                row["prompt"],
+                tokenize=True,
+                add_generation_prompt=True,
+            )
+            full_ids = tokenizer.apply_chat_template(
+                row["prompt"] + row["completion"],
+                tokenize=True,
+            )
+            prompt_len = len(prompt_ids)
+            total_len = len(full_ids)
+            completion_len = max(0, total_len - prompt_len)
+            prompts.append(prompt_len)
+            completions.append(completion_len)
+            totals.append(total_len)
+            if prompt_len >= max_length:
+                prompt_too_long += 1
+            if total_len > max_length:
+                truncating += 1
+        if truncating or prompt_too_long:
+            bad_splits.append(split)
+        print(
+            "  {split}: rows={rows}, avg_total={avg_total:.1f}, max_total={max_total}, "
+            "avg_prompt={avg_prompt:.1f}, max_prompt={max_prompt}, "
+            "avg_completion={avg_completion:.1f}, max_completion={max_completion}, "
+            "truncating={truncating}, prompt_too_long={prompt_too_long}".format(
+                split=split,
+                rows=len(rows),
+                avg_total=statistics.mean(totals) if totals else 0.0,
+                max_total=max(totals) if totals else 0,
+                avg_prompt=statistics.mean(prompts) if prompts else 0.0,
+                max_prompt=max(prompts) if prompts else 0,
+                avg_completion=statistics.mean(completions) if completions else 0.0,
+                max_completion=max(completions) if completions else 0,
+                truncating=truncating,
+                prompt_too_long=prompt_too_long,
+            )
+        )
+    if fail_on_truncation and bad_splits:
+        raise SystemExit(
+            "Some prompt/completion samples exceed max_seq_length and would truncate target JSON. "
+            "Increase max_seq_length or rebuild a more compact dataset."
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a LoRA adapter for coal blending.")
     parser.add_argument("--config", default="configs/qwen_lora.yaml")
+    parser.add_argument("--model-name-or-path", help="Override model_name_or_path from the config.")
+    parser.add_argument(
+        "--dry-run-data",
+        action="store_true",
+        help="Load tokenizer and dataset, print length diagnostics, then exit before loading model weights.",
+    )
     args = parser.parse_args()
     cfg = load_config(args.config)
+    if args.model_name_or_path:
+        cfg["model_name_or_path"] = args.model_name_or_path
 
     device = detect_device()
     print(f"Detected device: {device}")
     if device == "cpu":
         _print_pytorch_gpu_diagnostics()
-    if device == "cpu" and not cfg.get("allow_cpu_training", False):
+    if device == "cpu" and not cfg.get("allow_cpu_training", False) and not args.dry_run_data:
         raise SystemExit(
             "No CUDA/MPS device is available. Refusing to train on CPU by default because Qwen LoRA "
             "training will be extremely slow or may run out of memory. Use a CUDA/MPS environment, "
@@ -124,13 +287,35 @@ def main() -> None:
         )
 
     # ── Tokenizer ──────────────────────────────────────────────
-    tokenizer = AutoTokenizer.from_pretrained(
-        cfg["model_name_or_path"],
-        trust_remote_code=True,
-        use_fast=True,
-    )
+    model_name_or_path = resolve_model_name_or_path(cfg["model_name_or_path"])
+    tokenizer = load_tokenizer(model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+
+    # ── Dataset ────────────────────────────────────────────────
+    dataset = load_dataset(
+        "json",
+        data_files={
+            "train": resolve_path(cfg["train_file"]),
+            "validation": resolve_path(cfg["eval_file"]),
+        },
+        cache_dir=resolve_path(cfg.get("datasets_cache_dir", "outputs/cache/datasets")),
+    )
+    dataset = filter_dataset_by_task(dataset, cfg.get("filter_task"))
+    sft_format = str(cfg.get("sft_format", "prompt_completion"))
+    if sft_format == "prompt_completion":
+        dataset = prepare_prompt_completion_dataset(dataset)
+        print_and_validate_length_report(
+            dataset,
+            tokenizer,
+            max_length=int(cfg.get("max_seq_length", 2048)),
+            fail_on_truncation=bool(cfg.get("fail_on_truncated_completion", True)),
+        )
+    elif sft_format != "text":
+        raise SystemExit(f"Unsupported sft_format={sft_format!r}; use 'prompt_completion' or 'text'.")
+    if args.dry_run_data:
+        print("Dry run finished before model loading.")
+        return
 
     # ── Model loading (CUDA QLoRA / MPS fp16 / CPU fp32) ──────
     use_4bit = cfg.get("use_4bit", False) and device == "cuda"
@@ -165,7 +350,7 @@ def main() -> None:
 
     print(f"Loading model with dtype={torch_dtype}, 4bit={use_4bit}, device={device}")
     model = AutoModelForCausalLM.from_pretrained(
-        cfg["model_name_or_path"],
+        model_name_or_path,
         **model_kwargs,
     )
 
@@ -183,15 +368,6 @@ def main() -> None:
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
-
-    # ── Dataset ────────────────────────────────────────────────
-    dataset = load_dataset(
-        "json",
-        data_files={
-            "train": resolve_path(cfg["train_file"]),
-            "validation": resolve_path(cfg["eval_file"]),
-        },
-    )
 
     # ── Training args ──────────────────────────────────────────
     training_args = SFTConfig(
@@ -214,9 +390,15 @@ def main() -> None:
         remove_unused_columns=False,
         max_length=int(cfg.get("max_seq_length", 2048)),
         packing=False,
+        dataset_text_field=str(cfg.get("dataset_text_field", "text")),
+        completion_only_loss=cfg.get(
+            "completion_only_loss",
+            True if sft_format == "prompt_completion" else None,
+        ),
         # Qwen chat templates differ across model releases. Keep this configurable because
         # assistant_only_loss=True requires a chat template with assistant token masks.
         assistant_only_loss=bool(cfg.get("assistant_only_loss", False)),
+        gradient_checkpointing=bool(cfg.get("gradient_checkpointing", False)),
     )
 
     trainer = SFTTrainer(

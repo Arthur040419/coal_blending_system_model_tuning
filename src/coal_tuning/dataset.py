@@ -33,14 +33,34 @@ def build_training_records(
     public_samples: list[dict[str, object | None]] | None = None,
     include_explanation: bool = True,
     include_candidate: bool = True,
+    compact_candidate: bool = False,
+    candidate_max_materials: int = 8,
+    candidate_max_rules: int = 5,
+    candidate_max_cases: int = 3,
+    candidate_max_rag: int = 3,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     if include_explanation:
         records.extend(build_explanation_records(tables))
     if include_candidate:
-        records.extend(build_candidate_generation_records(tables))
+        records.extend(
+            build_candidate_generation_records(
+                tables,
+                compact=compact_candidate,
+                max_materials=candidate_max_materials,
+                max_rules=candidate_max_rules,
+                max_cases=candidate_max_cases,
+                max_rag=candidate_max_rag,
+            )
+        )
         if public_samples:
-            records.extend(build_public_candidate_generation_records(public_samples))
+            records.extend(
+                build_public_candidate_generation_records(
+                    public_samples,
+                    compact=compact_candidate,
+                    max_materials=candidate_max_materials,
+                )
+            )
     return records
 
 
@@ -81,6 +101,11 @@ def build_explanation_records(tables: dict[str, list[dict[str, object | None]]])
                 "system": SYSTEM_PROMPT,
                 "input": user_prompt,
                 "output": output,
+                "prompt": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "completion": [{"role": "assistant", "content": assistant_output}],
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
@@ -99,7 +124,14 @@ def build_explanation_records(tables: dict[str, list[dict[str, object | None]]])
     return records
 
 
-def build_candidate_generation_records(tables: dict[str, list[dict[str, object | None]]]) -> list[dict[str, Any]]:
+def build_candidate_generation_records(
+    tables: dict[str, list[dict[str, object | None]]],
+    compact: bool = False,
+    max_materials: int = 8,
+    max_rules: int = 5,
+    max_cases: int = 3,
+    max_rag: int = 3,
+) -> list[dict[str, Any]]:
     orders = {str(r["id"]): r for r in tables.get("orders", [])}
     details_by_plan: dict[str, list[dict[str, object | None]]] = {}
     for d in tables.get("blend_plan_detail", []):
@@ -143,12 +175,23 @@ def build_candidate_generation_records(tables: dict[str, list[dict[str, object |
         )
         if len(materials) < 2:
             continue
-        context = build_candidate_context(
-            order, candidate_scope, materials, rules, cases, rag
-        )
-        output = build_candidate_output(ranked, detail_groups, coal_types)
+        output = build_candidate_output(ranked, detail_groups, coal_types, compact=compact)
         if not output["plans"]:
             continue
+        if compact:
+            materials = select_materials_for_output(materials, output, max_materials)
+        context = build_candidate_context(
+            order,
+            candidate_scope,
+            materials,
+            rules,
+            cases,
+            rag,
+            compact=compact,
+            max_rules=max_rules,
+            max_cases=max_cases,
+            max_rag=max_rag,
+        )
         user_prompt = build_candidate_user_prompt(context)
         assistant_output = json_dumps(output)
         records.append(
@@ -158,6 +201,11 @@ def build_candidate_generation_records(tables: dict[str, list[dict[str, object |
                 "system": CANDIDATE_SYSTEM_PROMPT,
                 "input": user_prompt,
                 "output": output,
+                "prompt": [
+                    {"role": "system", "content": CANDIDATE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "completion": [{"role": "assistant", "content": assistant_output}],
                 "messages": [
                     {"role": "system", "content": CANDIDATE_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
@@ -184,17 +232,27 @@ def read_public_coal_quality_csv(path: str | Path | None) -> list[dict[str, obje
         return [dict(row) for row in csv.DictReader(f)]
 
 
-def build_public_candidate_generation_records(samples: list[dict[str, object | None]]) -> list[dict[str, Any]]:
+def build_public_candidate_generation_records(
+    samples: list[dict[str, object | None]],
+    compact: bool = False,
+    max_materials: int = 8,
+) -> list[dict[str, Any]]:
     cleaned = [s for s in samples if _has_public_quality(s)]
     records: list[dict[str, Any]] = []
     scenarios = _build_all_public_scenarios()
     for scenario in scenarios:
         materials = public_samples_to_materials(cleaned)
-        plans = build_public_candidate_plans(scenario, materials)
+        plans = build_public_candidate_plans(scenario, materials, compact=compact)
         if len(plans) < 3:
             continue
-        context = build_public_candidate_context(scenario, materials)
         output = {"plans": plans}
+        if compact:
+            materials = select_materials_for_output(materials, output, max_materials)
+            plans = _filter_output_to_materials(plans, materials)
+            output = {"plans": plans}
+            if len(plans) < 3:
+                continue
+        context = build_public_candidate_context(scenario, materials, compact=compact)
         user_prompt = build_candidate_user_prompt(context)
         assistant_output = json_dumps(output)
         records.append(
@@ -204,6 +262,11 @@ def build_public_candidate_generation_records(samples: list[dict[str, object | N
                 "system": CANDIDATE_SYSTEM_PROMPT,
                 "input": user_prompt,
                 "output": output,
+                "prompt": [
+                    {"role": "system", "content": CANDIDATE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "completion": [{"role": "assistant", "content": assistant_output}],
                 "messages": [
                     {"role": "system", "content": CANDIDATE_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
@@ -646,10 +709,14 @@ def build_candidate_context(
     rules: list[dict[str, object | None]],
     cases: list[dict[str, object | None]],
     rag: list[dict[str, object | None]],
+    compact: bool = False,
+    max_rules: int = 8,
+    max_cases: int = 5,
+    max_rag: int = 8,
 ) -> str:
     lines = [
-        "你是煤矿智能配煤系统中的候选方案生成助手。请基于订单约束、候选物料、规则和案例，生成候选配比建议。",
-        "目标：优先生成质量达标、质量余量充足、成本可控且库存可执行的配煤方案。",
+        "请基于订单约束、候选物料、规则和案例，生成候选配比建议。",
+        "目标：质量达标、余量充足、成本可控、库存可执行。",
         f"\n【候选范围】{candidate_scope}",
         "\n【订单信息】",
         (
@@ -659,22 +726,29 @@ def build_candidate_context(
         ).format(**_fmt_map(order)),
         "\n【候选物料】",
     ]
-    for m in materials[:12]:
-        lines.append(
-            "- coalId={coalId}，productBatchNo={productBatchNo}，名称={name}，可用量={availableQuantity}吨，"
-            "单价={unitCost}元/吨，灰分={ashContent}%，硫分={sulfurContent}%，水分={moistureContent}%，"
-            "挥发分={volatileContent}%，发热量={calorificValue} kcal/kg，来源={source}".format(
-                **_fmt_map(m)
+    for m in materials:
+        if compact:
+            lines.append(
+                "- coalId={coalId}，productBatchNo={productBatchNo}，名称={name}，可用量={availableQuantity}吨，"
+                "单价={unitCost}元/吨，灰分={ashContent}%，硫分={sulfurContent}%，水分={moistureContent}%，"
+                "挥发分={volatileContent}%，发热量={calorificValue} kcal/kg".format(**_fmt_map(m))
             )
-        )
+        else:
+            lines.append(
+                "- coalId={coalId}，productBatchNo={productBatchNo}，名称={name}，可用量={availableQuantity}吨，"
+                "单价={unitCost}元/吨，灰分={ashContent}%，硫分={sulfurContent}%，水分={moistureContent}%，"
+                "挥发分={volatileContent}%，发热量={calorificValue} kcal/kg，来源={source}".format(
+                    **_fmt_map(m)
+                )
+            )
     lines.append("\n【命中规则】")
-    for r in rules[:8]:
+    for r in rules[:max_rules]:
         lines.append("- {rule_code} {rule_name}（{rule_type}）：{rule_content}".format(**_fmt_map(r)))
     lines.append("\n【参考案例】")
-    for c in cases[:5]:
+    for c in cases[:max_cases]:
         lines.append("- {case_name}：{order_desc}；{blend_desc}；效果：{effectiveness_eval}".format(**_fmt_map(c)))
     lines.append("\n【RAG知识摘录】")
-    for k in rag[:8]:
+    for k in rag[:max_rag]:
         lines.append("- {title}（{knowledge_type}）：{content}".format(**_fmt_map(k)))
     return "\n".join(lines)
 
@@ -683,6 +757,7 @@ def build_candidate_output(
     ranked_plans: list[dict[str, object | None]],
     detail_groups: dict[str, list[dict[str, object | None]]],
     coal_types: dict[str, dict[str, object | None]],
+    compact: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
     plans: list[dict[str, Any]] = []
     for plan in ranked_plans[:5]:
@@ -695,11 +770,7 @@ def build_candidate_output(
                     "coalId": _to_int(d.get("coal_id")),
                     "productBatchNo": str(d.get("product_batch_no") or ""),
                     "ratio": _round_ratio(d.get("blend_ratio")),
-                    "reason": (
-                        f"{coal.get('coal_name') or '该物料'}参与配煤；"
-                        f"预测硫分{d.get('predicted_sulfur') or '—'}%，热值{d.get('predicted_calorific') or '—'}，"
-                        f"兼顾质量约束与库存可执行性。"
-                    ),
+                    "reason": _candidate_item_reason(coal, d, compact=compact),
                 }
             )
         if len(items) < 2:
@@ -710,12 +781,9 @@ def build_candidate_output(
         plans.append(
             {
                 "planName": str(plan.get("plan_name") or "候选方案"),
-                "strategy": safe_text(
-                    plan.get("ai_candidate_reason"),
-                    f"综合评分{plan.get('overall_score') or '—'}，质量、成本和库存稳定性综合排序靠前。",
-                ),
+                "strategy": _candidate_strategy(plan, compact=compact),
                 "items": normalized,
-                "risk": safe_text(plan.get("risk_tip"), "执行前复核煤质实测与库存余量。"),
+                "risk": _candidate_risk(plan, compact=compact),
             }
         )
     return {"plans": plans}
@@ -746,9 +814,10 @@ def public_samples_to_materials(samples: list[dict[str, object | None]]) -> list
 def build_public_candidate_context(
     scenario: dict[str, object | None],
     materials: list[dict[str, object | None]],
+    compact: bool = False,
 ) -> str:
     lines = [
-        "你是煤矿智能配煤系统中的候选方案生成助手。以下候选物料来自公开煤质资料整理，适合用于模型调优基线实验。",
+        "以下候选物料来自公开煤质资料整理，适合用于模型调优基线实验。",
         "\n【候选范围】product_batch",
         "\n【订单信息】",
         (
@@ -759,15 +828,22 @@ def build_public_candidate_context(
         "\n【候选物料】",
     ]
     for m in materials:
-        lines.append(
-            "- coalId={coalId}，productBatchNo={productBatchNo}，名称={name}，可用量={availableQuantity}吨，"
-            "单价={unitCost}元/吨，灰分={ashContent}%，硫分={sulfurContent}%，水分={moistureContent}%，"
-            "挥发分={volatileContent}%，发热量={calorificValue} kcal/kg，公开来源={source}".format(
-                **_fmt_map(m)
+        if compact:
+            lines.append(
+                "- coalId={coalId}，productBatchNo={productBatchNo}，名称={name}，可用量={availableQuantity}吨，"
+                "单价={unitCost}元/吨，灰分={ashContent}%，硫分={sulfurContent}%，水分={moistureContent}%，"
+                "挥发分={volatileContent}%，发热量={calorificValue} kcal/kg".format(**_fmt_map(m))
             )
-        )
+        else:
+            lines.append(
+                "- coalId={coalId}，productBatchNo={productBatchNo}，名称={name}，可用量={availableQuantity}吨，"
+                "单价={unitCost}元/吨，灰分={ashContent}%，硫分={sulfurContent}%，水分={moistureContent}%，"
+                "挥发分={volatileContent}%，发热量={calorificValue} kcal/kg，公开来源={source}".format(
+                    **_fmt_map(m)
+                )
+            )
     lines.extend(
-        _build_public_rules_context(scenario)
+        _build_public_rules_context(scenario, compact=compact)
     )
     return "\n".join(lines)
 
@@ -775,6 +851,7 @@ def build_public_candidate_context(
 def build_public_candidate_plans(
     scenario: dict[str, object | None],
     materials: list[dict[str, object | None]],
+    compact: bool = False,
 ) -> list[dict[str, Any]]:
     by_batch = {str(m["productBatchNo"]): m for m in materials}
 
@@ -847,17 +924,122 @@ def build_public_candidate_plans(
         plans.append(
             {
                 "planName": f"公开煤质候选方案-{chr(64 + len(plans) + 1)}",
-                "strategy": (
-                    f"{scenario['strategy']} 加权预测灰分{metrics['ash']:.2f}%、"
-                    f"硫分{metrics['sulfur']:.2f}%、水分{metrics['moisture']:.2f}%、"
-                    f"热值{metrics['calorific']:.0f} kcal/kg，"
-                    f"吨煤成本约{_weighted_public_cost(selected):.0f}元。"
-                ),
+                "strategy": _public_plan_strategy(scenario, selected, metrics, compact=compact),
                 "items": items,
                 "risk": _public_plan_risk(scenario, selected, metrics),
             }
         )
     return plans
+
+
+def select_materials_for_output(
+    materials: list[dict[str, object | None]],
+    output: dict[str, list[dict[str, Any]]],
+    max_materials: int,
+) -> list[dict[str, object | None]]:
+    used_keys: set[str] = set()
+    for plan in output.get("plans", []):
+        for item in plan.get("items", []):
+            used_keys.add(_material_key(item))
+
+    selected: list[dict[str, object | None]] = []
+    seen: set[str] = set()
+    for material in materials:
+        key = _material_key(material)
+        if key in used_keys and key not in seen:
+            selected.append(material)
+            seen.add(key)
+
+    remaining_slots = max(0, max_materials - len(selected))
+    extras = [m for m in materials if _material_key(m) not in seen]
+    extras = sorted(extras, key=_material_context_score, reverse=True)
+    selected.extend(extras[:remaining_slots])
+    return selected
+
+
+def _filter_output_to_materials(
+    plans: list[dict[str, Any]],
+    materials: list[dict[str, object | None]],
+) -> list[dict[str, Any]]:
+    material_keys = {_material_key(m) for m in materials}
+    out: list[dict[str, Any]] = []
+    for plan in plans:
+        if all(_material_key(item) in material_keys for item in plan.get("items", [])):
+            out.append(plan)
+    return out
+
+
+def _material_key(row: dict[str, object | None]) -> str:
+    batch = str(row.get("productBatchNo") or "").strip()
+    if batch:
+        return f"batch:{batch}"
+    coal_id = str(row.get("coalId") or "").strip()
+    return f"coal:{coal_id}" if coal_id else ""
+
+
+def _material_context_score(material: dict[str, object | None]) -> float:
+    calorific = _num(material.get("calorificValue"))
+    cost = _num(material.get("unitCost"))
+    sulfur = _num(material.get("sulfurContent"))
+    ash = _num(material.get("ashContent"))
+    moisture = _num(material.get("moistureContent"))
+    inventory = _num(material.get("availableQuantity"))
+    return calorific / 100.0 + inventory / 1000.0 - cost / 100.0 - sulfur * 4.0 - ash / 20.0 - moisture / 20.0
+
+
+def _candidate_item_reason(
+    coal: dict[str, object | None],
+    detail: dict[str, object | None],
+    compact: bool = False,
+) -> str:
+    coal_name = coal.get("coal_name") or "该物料"
+    sulfur = detail.get("predicted_sulfur") or "—"
+    calorific = detail.get("predicted_calorific") or "—"
+    if compact:
+        return f"{coal_name}参与配煤，预测硫分{sulfur}%，热值{calorific}。"
+    return (
+        f"{coal_name}参与配煤；预测硫分{sulfur}%，热值{calorific}，"
+        "兼顾质量约束与库存可执行性。"
+    )
+
+
+def _candidate_strategy(plan: dict[str, object | None], compact: bool = False) -> str:
+    if not compact:
+        return safe_text(
+            plan.get("ai_candidate_reason"),
+            f"综合评分{plan.get('overall_score') or '—'}，质量、成本和库存稳定性综合排序靠前。",
+        )
+    return (
+        f"综合评分{fmt_num(plan.get('overall_score'))}，质量{fmt_num(plan.get('quality_score'))}，"
+        f"成本{fmt_num(plan.get('cost_score'))}，库存稳定{fmt_num(plan.get('stability_score'))}。"
+    )
+
+
+def _candidate_risk(plan: dict[str, object | None], compact: bool = False) -> str:
+    risk = safe_text(plan.get("risk_tip"), "执行前复核煤质实测与库存余量。")
+    if not compact or len(risk) <= 80:
+        return risk
+    return risk[:80].rstrip("；，。") + "。"
+
+
+def _public_plan_strategy(
+    scenario: dict[str, object | None],
+    selected: list[tuple[dict[str, object | None], float]],
+    metrics: dict[str, float],
+    compact: bool = False,
+) -> str:
+    if compact:
+        return (
+            f"预测灰分{metrics['ash']:.2f}%、硫分{metrics['sulfur']:.2f}%、"
+            f"水分{metrics['moisture']:.2f}%、热值{metrics['calorific']:.0f} kcal/kg，"
+            f"吨煤成本约{_weighted_public_cost(selected):.0f}元。"
+        )
+    return (
+        f"{scenario['strategy']} 加权预测灰分{metrics['ash']:.2f}%、"
+        f"硫分{metrics['sulfur']:.2f}%、水分{metrics['moisture']:.2f}%、"
+        f"热值{metrics['calorific']:.0f} kcal/kg，"
+        f"吨煤成本约{_weighted_public_cost(selected):.0f}元。"
+    )
 
 
 def fallback_rule_basis(plan: dict[str, object | None], rules: list[dict[str, object | None]]) -> str:
@@ -1136,8 +1318,21 @@ def _public_plan_risk(
     return "".join(risks[:4])
 
 
-def _build_public_rules_context(scenario: dict[str, object | None]) -> list[str]:
+def _build_public_rules_context(scenario: dict[str, object | None], compact: bool = False) -> list[str]:
     """Build realistic blending rule texts based on GB/T 25960-2010 and industry practice."""
+    if compact:
+        return [
+            "\n【命中规则】",
+            "- 配煤煤种数量以2-4种为宜，ratio之和必须为1。",
+            "- 灰分、硫分、水分按配比加权后不得超过订单上限，发热量不得低于订单下限。",
+            "- 高硫煤、高水分煤或低热值煤只能在约束允许范围内低比例参与。",
+            "- 含准东煤时关注高水分和结渣风险，执行前用企业入厂检测值复核。",
+            "\n【参考案例】",
+            "- 准东煤掺烧案例：低价准东煤需搭配低硫高热值煤，控制水分和结渣风险。",
+            "- 成本优先电煤案例：低价煤降本时必须保留热值和水分安全余量。",
+            "\n【RAG知识摘录】",
+            "- 煤质指标中灰分、硫分、水分、挥发分、发热量通常按配比线性加权计算。",
+        ]
     return [
         "\n【命中规则（GB/T 25960-2010 动力配煤规范）】",
         "- 挥发分差值限制规则：高挥发分煤与低挥发分煤Vdaf差值≥15%时，低挥发分煤配入量一般不大于20%，且须先做燃烧试验。",

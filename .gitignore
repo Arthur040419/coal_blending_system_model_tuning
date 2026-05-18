@@ -209,6 +209,7 @@ tempCodeRunnerFile.py
 # Model tuning artifacts
 #outputs/adapters/**
 !outputs/adapters/.gitkeep
+outputs/cache/**
 *.safetensors
 *.bin
 *.pt

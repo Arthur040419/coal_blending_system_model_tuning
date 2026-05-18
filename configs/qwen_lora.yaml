@@ -1,12 +1,17 @@
 # LoRA fine-tuning config for coal blending model.
-# Ollama 的 qwen2.5:1.5b 对应 HuggingFace 训练权重通常使用 Qwen/Qwen2.5-1.5B-Instruct。
-# Ollama tag 不能直接作为 transformers 的 model_name_or_path 使用。
-model_name_or_path: D:\models\Qwen2.5-1.5B-Instruct
+# Ollama 的 qwen3:4b 是运行时 tag；Transformers/PEFT 训练需要使用
+# 对应的 HuggingFace 模型名或本地 HF 格式权重目录。
+model_name_or_path: Qwen/Qwen3-4B-Instruct-2507
 train_file: data/processed/train.jsonl
 eval_file: data/processed/eval.jsonl
-output_dir: outputs/adapters/qwen2.5-1.5b-coal-lora
+output_dir: outputs/adapters/qwen3-4b-coal-lora
 
 max_seq_length: 2048
+# The mixed all-task dataset is long. The training script now fails fast if target
+# JSON would be truncated; prefer configs/qwen_lora_candidate.yaml for current experiments.
+sft_format: prompt_completion
+completion_only_loss: true
+fail_on_truncated_completion: true
 num_train_epochs: 3
 per_device_train_batch_size: 1
 per_device_eval_batch_size: 1

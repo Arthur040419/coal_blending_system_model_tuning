@@ -72,6 +72,15 @@ python3 scripts/build_dataset.py
 python3 scripts/build_dataset.py --tasks candidate
 ```
 
+推荐的候选方案生成专项训练数据：
+
+```bash
+python3 scripts/build_dataset.py \
+  --tasks candidate \
+  --compact-candidate-context \
+  --output-dir data/processed_candidate
+```
+
 只生成方案解释任务：
 
 ```bash
@@ -87,6 +96,7 @@ python3 scripts/build_dataset.py --tasks explanation
 数据格式包括：
 
 - `messages`：适合 Chat 模型训练的 system/user/assistant 三段消息；
+- `prompt` / `completion`：适合 TRL completion-only SFT，训练时只对 assistant JSON 计算 loss；
 - `text`：兼容 SFTTrainer 的纯文本样本；
 - `task=candidate_generation`：目标 JSON 字段与后端 `AiBlendCandidateServiceImpl` 保持一致，即 `{"plans":[...]}`。
 - `task=plan_explanation`：目标 JSON 字段与后端 `ModelInferenceServiceImpl` 保持一致。
@@ -95,52 +105,73 @@ python3 scripts/build_dataset.py --tasks explanation
 
 ## 训练 LoRA
 
-默认基座模型已经配置为 `Qwen/Qwen2.5-1.5B-Instruct`，对应 Ollama 侧常用 tag `qwen2.5:1.5b`。注意：`qwen2.5:1.5b` 是 Ollama tag，不能直接作为 transformers 训练脚本的 `model_name_or_path`。
+默认基座模型已经配置为 `Qwen/Qwen3-4B-Instruct-2507`，对应 Ollama 侧常用 tag `qwen3:4b`。注意：`qwen3:4b` 是 Ollama tag，不能直接作为 transformers 训练脚本的 `model_name_or_path`。
 
-训练命令：
+完整任务训练命令：
 
 ```bash
 source .venv/bin/activate
 python3 scripts/train_lora.py --config configs/qwen_lora.yaml
 ```
 
+候选方案生成专项 LoRA 训练命令，这是当前阶段的推荐入口：
+
+```bash
+source .venv/bin/activate
+python3 scripts/train_lora.py --config configs/qwen_lora_candidate.yaml
+```
+
+训练前只检查数据长度和 completion 是否会被截断：
+
+```bash
+python3 scripts/train_lora.py \
+  --config configs/qwen_lora_candidate.yaml \
+  --dry-run-data
+```
+
 如果不想激活虚拟环境，也可以直接执行：
 
 ```bash
-.venv/bin/python scripts/train_lora.py --config configs/qwen_lora.yaml
+.venv/bin/python scripts/train_lora.py --config configs/qwen_lora_candidate.yaml
 ```
 
 ### HuggingFace 下载超时
 
-训练首次运行会从 HuggingFace 下载 `Qwen/Qwen2.5-1.5B-Instruct`。如果 Windows 上出现 `WinError 10060`、`Read timed out` 或一直重试，说明网络无法稳定访问 HuggingFace。可选择以下任一方式：
+训练首次运行会从 HuggingFace 下载 `Qwen/Qwen3-4B-Instruct-2507`。如果 Windows 上出现 `WinError 10060`、`Read timed out` 或一直重试，说明网络无法稳定访问 HuggingFace。可选择以下任一方式：
 
 方式一：在 PowerShell 中为当前窗口设置代理后重新训练：
 
 ```powershell
 $env:HTTP_PROXY="http://127.0.0.1:7890"
 $env:HTTPS_PROXY="http://127.0.0.1:7890"
-python scripts/train_lora.py --config configs/qwen_lora.yaml
+python scripts/train_lora.py --config configs/qwen_lora_candidate.yaml
 ```
 
 其中端口需要改成你本机代理软件实际提供的 HTTP 端口。
 
-方式二：先把模型下载到本地，再把 `configs/qwen_lora.yaml` 中的 `model_name_or_path` 改成本地目录：
+方式二：先把模型下载到本地，再把 `configs/qwen_lora_candidate.yaml` 或 `configs/qwen_lora.yaml` 中的 `model_name_or_path` 改成本地目录：
 
 ```powershell
-hf download Qwen/Qwen2.5-1.5B-Instruct `
-  --local-dir D:\models\Qwen2.5-1.5B-Instruct
+hf download Qwen/Qwen3-4B-Instruct-2507 `
+  --local-dir D:\models\Qwen3-4B-Instruct-2507
 ```
 
 然后修改：
 
 ```yaml
-model_name_or_path: D:\models\Qwen2.5-1.5B-Instruct
+model_name_or_path: D:\models\Qwen3-4B-Instruct-2507
 ```
 
 训练产物默认输出到：
 
 ```text
-outputs/adapters/qwen2.5-1.5b-coal-lora/
+outputs/adapters/qwen3-4b-coal-lora/
+```
+
+候选专项训练产物默认输出到：
+
+```text
+outputs/adapters/qwen3-4b-coal-candidate-lora/
 ```
 
 该目录可能很大，已在 `.gitignore` 中忽略。
@@ -176,7 +207,7 @@ python3 scripts/evaluate_json_outputs.py --limit 20
 
 ```bash
 python3 scripts/evaluate_json_outputs.py \
-  --base-model Qwen/Qwen2.5-1.5B-Instruct \
+  --base-model Qwen/Qwen3-4B-Instruct-2507 \
   --limit 20 \
   --report-file outputs/reports/base_eval_report.json
 ```
@@ -185,8 +216,8 @@ python3 scripts/evaluate_json_outputs.py \
 
 ```bash
 python3 scripts/evaluate_json_outputs.py \
-  --base-model Qwen/Qwen2.5-1.5B-Instruct \
-  --adapter outputs/adapters/qwen2.5-1.5b-coal-lora \
+  --base-model Qwen/Qwen3-4B-Instruct-2507 \
+  --adapter outputs/adapters/qwen3-4b-coal-candidate-lora \
   --limit 20 \
   --report-file outputs/reports/lora_eval_report.json
 ```
@@ -220,12 +251,12 @@ python3 scripts/plot_quality_radar.py \
 
 ```bash
 python3 merge_lora.py \
-  --base-model Qwen/Qwen2.5-1.5B-Instruct \
-  --adapter outputs/adapters/qwen2.5-1.5b-coal-lora \
-  --output outputs/merged/qwen2.5-1.5b-coal-merged
+  --base-model Qwen/Qwen3-4B-Instruct-2507 \
+  --adapter outputs/adapters/qwen3-4b-coal-candidate-lora \
+  --output outputs/merged/qwen3-4b-coal-candidate-merged
 ```
 
-生成 Ollama Modelfile 模板时，默认基座为 `qwen2.5:1.5b`：
+生成 Ollama Modelfile 模板时，默认基座为 `qwen3:4b`：
 
 ```bash
 python3 scripts/make_ollama_modelfile.py --output outputs/merged/Modelfile
@@ -234,7 +265,7 @@ python3 scripts/make_ollama_modelfile.py --output outputs/merged/Modelfile
 主系统只需要在 `model_config` 表中新增或启用一条配置：
 
 ```text
-model_name: qwen2.5-1.5b-coal-lora
+model_name: qwen3-4b-coal-candidate-lora
 model_type: LOCAL_OLLAMA 或 LLM
 api_url: http://127.0.0.1:11434/v1/chat/completions
 status: 1

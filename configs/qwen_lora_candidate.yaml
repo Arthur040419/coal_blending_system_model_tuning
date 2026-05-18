@@ -1,0 +1,45 @@
+# Candidate-generation-only LoRA config.
+# Ollama's qwen3:4b is a runtime tag. Transformers/PEFT training needs the
+# matching HuggingFace model id or a local HF-format model directory.
+# Keep this pointed at a clean Qwen3 base model, not a previously merged LoRA model.
+model_name_or_path: Qwen/Qwen3-4B-Instruct-2507
+train_file: data/processed_candidate/train.jsonl
+eval_file: data/processed_candidate/eval.jsonl
+output_dir: outputs/adapters/qwen3-4b-coal-candidate-lora
+datasets_cache_dir: outputs/cache/datasets
+
+# Candidate prompts are compact, but still longer than normal chat samples.
+max_seq_length: 4096
+sft_format: prompt_completion
+filter_task: candidate_generation
+completion_only_loss: true
+assistant_only_loss: false
+fail_on_truncated_completion: true
+
+num_train_epochs: 4
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 8
+gradient_checkpointing: true
+learning_rate: 0.0001
+warmup_ratio: 0.05
+logging_steps: 2
+eval_steps: 10
+save_steps: 10
+
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.05
+target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+use_4bit: true
+bf16: false
+fp16: true
+allow_cpu_training: false

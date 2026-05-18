@@ -1,0 +1,30 @@
+{
+  "total": 14,
+  "valid_json_rate": 1.0,
+  "by_task": {
+    "candidate_generation": {
+      "total": 14,
+      "valid_json_rate": 1.0,
+      "complete_field_rate": 1.0,
+      "nonempty_field_rate": 1.0,
+      "field_nonempty_rate": {
+        "plans": 1.0
+      },
+      "candidate_plan_count": 67,
+      "valid_candidate_plan_rate": 1.0,
+      "valid_ratio_plan_rate": 1.0,
+      "valid_item_count_plan_rate": 1.0,
+      "business_plan_count": 67,
+      "average_business_effect_score": 0.8731,
+      "best_plan_business_effect_score": 0.882,
+      "radar_metrics": {
+        "质量达标": 0.9963,
+        "质量余量": 0.7545,
+        "成本优势": 0.5623,
+        "库存可执行": 1.0,
+        "配比均衡": 0.9403,
+        "风险控制": 0.9015
+      }
+    }
+  }
+}
