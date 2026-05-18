@@ -177,24 +177,42 @@ def filter_dataset_by_task(dataset: Any, task: str | None) -> Any:
 def prepare_prompt_completion_dataset(dataset: Any) -> Any:
     """Convert local JSONL rows to TRL prompt/completion format.
 
-    This avoids relying on Qwen chat-template assistant masks, which are absent in
-    several Qwen tokenizer releases. TRL will instead use completion_mask so loss
-    is applied only to the assistant answer.
+    The dataset stores prompt/completion as chat messages for readability. For
+    training, convert them to explicit Qwen chat text so we do not depend on the
+    downloaded tokenizer directory containing a compatible chat_template.jinja.
+    TRL will still use completion_mask so loss is applied only to the assistant
+    answer.
     """
+
+    def render_message(message: dict[str, Any]) -> str:
+        role = message.get("role")
+        content = message.get("content", "")
+        if role not in {"system", "user", "assistant"}:
+            raise ValueError(f"Unsupported chat role: {role!r}")
+        return f"<|im_start|>{role}\n{content}<|im_end|>\n"
+
+    def render_prompt(messages: list[dict[str, Any]]) -> str:
+        return "".join(render_message(message) for message in messages) + "<|im_start|>assistant\n"
+
+    def render_completion(messages: list[dict[str, Any]]) -> str:
+        if len(messages) != 1 or messages[0].get("role") != "assistant":
+            raise ValueError("Completion must contain exactly one assistant message.")
+        return f"{messages[0].get('content', '')}<|im_end|>\n"
 
     def convert(row: dict[str, Any]) -> dict[str, Any]:
         if row.get("prompt") and row.get("completion"):
-            return {"prompt": row["prompt"], "completion": row["completion"]}
+            prompt = row["prompt"]
+            completion = row["completion"]
+            if isinstance(prompt, list) and isinstance(completion, list):
+                return {"prompt": render_prompt(prompt), "completion": render_completion(completion)}
+            return {"prompt": str(prompt), "completion": str(completion)}
         messages = row.get("messages") or []
         if len(messages) < 2:
             raise ValueError(f"Row {row.get('id') or '<unknown>'} has no usable messages.")
         assistant = messages[-1]
         if assistant.get("role") != "assistant":
             raise ValueError(f"Row {row.get('id') or '<unknown>'} must end with an assistant message.")
-        return {
-            "prompt": messages[:-1],
-            "completion": [assistant],
-        }
+        return {"prompt": render_prompt(messages[:-1]), "completion": render_completion([assistant])}
 
     converted = {}
     for split, rows in dataset.items():
@@ -216,15 +234,8 @@ def print_and_validate_length_report(dataset: Any, tokenizer: Any, max_length: i
         truncating = 0
         prompt_too_long = 0
         for row in rows:
-            prompt_ids = tokenizer.apply_chat_template(
-                row["prompt"],
-                tokenize=True,
-                add_generation_prompt=True,
-            )
-            full_ids = tokenizer.apply_chat_template(
-                row["prompt"] + row["completion"],
-                tokenize=True,
-            )
+            prompt_ids = tokenizer(str(row["prompt"]), add_special_tokens=False)["input_ids"]
+            full_ids = tokenizer(str(row["prompt"]) + str(row["completion"]), add_special_tokens=False)["input_ids"]
             prompt_len = len(prompt_ids)
             total_len = len(full_ids)
             completion_len = max(0, total_len - prompt_len)
