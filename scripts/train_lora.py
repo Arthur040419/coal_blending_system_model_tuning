@@ -34,7 +34,7 @@ try:
     import torch
     import yaml
     from datasets import load_dataset
-    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
     from transformers import (
         AutoModelForCausalLM,
         AutoTokenizer,
@@ -383,15 +383,21 @@ def main() -> None:
         model = prepare_model_for_kbit_training(model)
 
     # ── LoRA ───────────────────────────────────────────────────
-    lora_config = LoraConfig(
-        r=int(cfg.get("lora_r", 8)),
-        lora_alpha=int(cfg.get("lora_alpha", 16)),
-        lora_dropout=float(cfg.get("lora_dropout", 0.05)),
-        bias="none",
-        task_type="CAUSAL_LM",
-        target_modules=cfg.get("target_modules"),
-    )
-    model = get_peft_model(model, lora_config)
+    init_adapter = cfg.get("init_adapter")
+    if init_adapter:
+        adapter_path = resolve_path(init_adapter)
+        print(f"Loading existing LoRA adapter for continued training: {adapter_path}")
+        model = PeftModel.from_pretrained(model, adapter_path, is_trainable=True)
+    else:
+        lora_config = LoraConfig(
+            r=int(cfg.get("lora_r", 8)),
+            lora_alpha=int(cfg.get("lora_alpha", 16)),
+            lora_dropout=float(cfg.get("lora_dropout", 0.05)),
+            bias="none",
+            task_type="CAUSAL_LM",
+            target_modules=cfg.get("target_modules"),
+        )
+        model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
     # ── Training args ──────────────────────────────────────────

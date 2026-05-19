@@ -70,6 +70,18 @@ def main() -> None:
         default=3,
         help="Maximum RAG snippets kept in compact candidate-generation prompts.",
     )
+    parser.add_argument(
+        "--candidate-max-plans",
+        type=int,
+        default=5,
+        help="Maximum plans kept in each candidate-generation target JSON.",
+    )
+    parser.add_argument(
+        "--candidate-prompt-style",
+        choices=["training", "backend"],
+        default="training",
+        help="Use the original training prompt or the backend AiBlendCandidateServiceImpl prompt style.",
+    )
     args = parser.parse_args()
 
     sql_path = (ROOT / args.sql).resolve() if not Path(args.sql).is_absolute() else Path(args.sql)
@@ -90,6 +102,8 @@ def main() -> None:
         candidate_max_rules=args.candidate_max_rules,
         candidate_max_cases=args.candidate_max_cases,
         candidate_max_rag=args.candidate_max_rag,
+        candidate_max_plans=args.candidate_max_plans,
+        candidate_prompt_style=args.candidate_prompt_style,
     )
     if not records:
         raise SystemExit("No usable training records were generated. Check SQL dump content.")

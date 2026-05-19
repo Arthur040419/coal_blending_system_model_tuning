@@ -1,0 +1,50 @@
+# Second-round candidate-generation LoRA config.
+# This continues from checkpoint-10 and trains on backend-style prompts with
+# shorter, higher-confidence 3-plan targets.
+model_name_or_path: Qwen/Qwen3-4B-Instruct-2507
+init_adapter: outputs/adapters/qwen3-4b-coal-candidate-lora/checkpoint-10
+train_file: data/processed_candidate_v2/train.jsonl
+eval_file: data/processed_candidate_v2/eval.jsonl
+output_dir: outputs/adapters/qwen3-4b-coal-candidate-v2-lora
+datasets_cache_dir: outputs/cache/datasets
+
+max_seq_length: 4096
+sft_format: prompt_completion
+filter_task: candidate_generation
+completion_only_loss: true
+assistant_only_loss: false
+fail_on_truncated_completion: true
+
+# Keep this run short and stable on a Windows single-GPU workstation.
+max_train_samples: 48
+max_eval_samples: 8
+num_train_epochs: 1
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 4
+gradient_checkpointing: true
+learning_rate: 0.00005
+warmup_ratio: 0.05
+logging_steps: 1
+eval_strategy: "no"
+save_strategy: "epoch"
+save_total_limit: 1
+eval_steps: 1000
+save_steps: 1000
+
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.05
+target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+use_4bit: true
+bf16: false
+fp16: true
+allow_cpu_training: false

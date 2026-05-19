@@ -57,6 +57,22 @@ CANDIDATE_OUTPUT_SCHEMA_HINT = """请严格输出 JSON，字段如下：
 }
 """
 
+BACKEND_CANDIDATE_INSTRUCTIONS = """你是煤矿智能配煤系统中的候选方案生成助手。请基于订单约束、候选物料、规则和案例，生成候选配比建议。
+重要边界：你只负责提出候选配比，系统会再做质量、库存、规则和多目标评分校验。
+
+【输出要求】
+1. 只能输出 JSON，不要 Markdown，不要解释前缀。
+2. JSON 顶层必须为 {"plans": [...]}。
+3. 输出 3 个候选方案；无法生成时输出 {"plans": []}。
+4. 每个方案使用 2 到 4 种候选物料，ratio 之和必须等于 1。
+5. 只能使用下方候选物料中的 coalId 和 productBatchNo，不得编造煤种、批次或指标。
+6. product_batch 模式下必须填写 productBatchNo；coal_type 模式下 productBatchNo 可为空。
+7. 不要修改订单需求量，不要输出库存不足的配比。
+
+JSON格式：
+{"plans":[{"planName":"方案名称","strategy":"生成策略","items":[{"coalId":1,"productBatchNo":"PBxxx","ratio":0.6,"reason":"选择原因"}],"risk":"风险提示"}]}
+"""
+
 
 def build_user_prompt(context: str) -> str:
     return f"{context.strip()}\n\n{OUTPUT_SCHEMA_HINT}"
@@ -64,6 +80,13 @@ def build_user_prompt(context: str) -> str:
 
 def build_candidate_user_prompt(context: str) -> str:
     return f"{context.strip()}\n\n{CANDIDATE_OUTPUT_SCHEMA_HINT}"
+
+
+def build_backend_candidate_user_prompt(context: str) -> str:
+    marker = "【候选范围】"
+    idx = context.find(marker)
+    body = context[idx:] if idx >= 0 else context.strip()
+    return f"{BACKEND_CANDIDATE_INSTRUCTIONS.strip()}\n\n{body.strip()}"
 
 
 def to_chatml(system_prompt: str, user_prompt: str, assistant_output: str | None = None) -> str:
@@ -75,4 +98,3 @@ def to_chatml(system_prompt: str, user_prompt: str, assistant_output: str | None
     if assistant_output is not None:
         text += assistant_output.strip()
     return text
-

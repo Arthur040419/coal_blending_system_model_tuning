@@ -9,6 +9,7 @@ from typing import Any
 from .prompts import (
     CANDIDATE_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
+    build_backend_candidate_user_prompt,
     build_candidate_user_prompt,
     build_user_prompt,
     to_chatml,
@@ -38,6 +39,8 @@ def build_training_records(
     candidate_max_rules: int = 5,
     candidate_max_cases: int = 3,
     candidate_max_rag: int = 3,
+    candidate_max_plans: int = 5,
+    candidate_prompt_style: str = "training",
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     if include_explanation:
@@ -51,6 +54,8 @@ def build_training_records(
                 max_rules=candidate_max_rules,
                 max_cases=candidate_max_cases,
                 max_rag=candidate_max_rag,
+                max_plans=candidate_max_plans,
+                prompt_style=candidate_prompt_style,
             )
         )
         if public_samples:
@@ -59,6 +64,8 @@ def build_training_records(
                     public_samples,
                     compact=compact_candidate,
                     max_materials=candidate_max_materials,
+                    max_plans=candidate_max_plans,
+                    prompt_style=candidate_prompt_style,
                 )
             )
     return records
@@ -131,6 +138,8 @@ def build_candidate_generation_records(
     max_rules: int = 5,
     max_cases: int = 3,
     max_rag: int = 3,
+    max_plans: int = 5,
+    prompt_style: str = "training",
 ) -> list[dict[str, Any]]:
     orders = {str(r["id"]): r for r in tables.get("orders", [])}
     details_by_plan: dict[str, list[dict[str, object | None]]] = {}
@@ -163,7 +172,7 @@ def build_candidate_generation_records(
                 -_num(p.get("total_cost")),
             ),
             reverse=True,
-        )[:5]
+        )[:max_plans]
         if len(ranked) < 1:
             continue
         detail_groups = {str(p.get("id")): details_by_plan.get(str(p.get("id")), []) for p in ranked}
@@ -175,7 +184,7 @@ def build_candidate_generation_records(
         )
         if len(materials) < 2:
             continue
-        output = build_candidate_output(ranked, detail_groups, coal_types, compact=compact)
+        output = build_candidate_output(ranked, detail_groups, coal_types, compact=compact, max_plans=max_plans)
         if not output["plans"]:
             continue
         if compact:
@@ -192,7 +201,7 @@ def build_candidate_generation_records(
             max_cases=max_cases,
             max_rag=max_rag,
         )
-        user_prompt = build_candidate_user_prompt(context)
+        user_prompt = build_candidate_prompt(context, prompt_style)
         assistant_output = json_dumps(output)
         records.append(
             {
@@ -232,17 +241,27 @@ def read_public_coal_quality_csv(path: str | Path | None) -> list[dict[str, obje
         return [dict(row) for row in csv.DictReader(f)]
 
 
+def build_candidate_prompt(context: str, prompt_style: str = "training") -> str:
+    if prompt_style == "backend":
+        return build_backend_candidate_user_prompt(context)
+    if prompt_style != "training":
+        raise ValueError(f"Unsupported candidate prompt style: {prompt_style!r}")
+    return build_candidate_user_prompt(context)
+
+
 def build_public_candidate_generation_records(
     samples: list[dict[str, object | None]],
     compact: bool = False,
     max_materials: int = 8,
+    max_plans: int = 5,
+    prompt_style: str = "training",
 ) -> list[dict[str, Any]]:
     cleaned = [s for s in samples if _has_public_quality(s)]
     records: list[dict[str, Any]] = []
     scenarios = _build_all_public_scenarios()
     for scenario in scenarios:
         materials = public_samples_to_materials(cleaned)
-        plans = build_public_candidate_plans(scenario, materials, compact=compact)
+        plans = build_public_candidate_plans(scenario, materials, compact=compact, max_plans=max_plans)
         if len(plans) < 3:
             continue
         output = {"plans": plans}
@@ -253,7 +272,7 @@ def build_public_candidate_generation_records(
             if len(plans) < 3:
                 continue
         context = build_public_candidate_context(scenario, materials, compact=compact)
-        user_prompt = build_candidate_user_prompt(context)
+        user_prompt = build_candidate_prompt(context, prompt_style)
         assistant_output = json_dumps(output)
         records.append(
             {
@@ -758,9 +777,10 @@ def build_candidate_output(
     detail_groups: dict[str, list[dict[str, object | None]]],
     coal_types: dict[str, dict[str, object | None]],
     compact: bool = False,
+    max_plans: int = 5,
 ) -> dict[str, list[dict[str, Any]]]:
     plans: list[dict[str, Any]] = []
-    for plan in ranked_plans[:5]:
+    for plan in ranked_plans[:max_plans]:
         details = detail_groups.get(str(plan.get("id")), [])
         items = []
         for d in details[:4]:
@@ -852,6 +872,7 @@ def build_public_candidate_plans(
     scenario: dict[str, object | None],
     materials: list[dict[str, object | None]],
     compact: bool = False,
+    max_plans: int = 5,
 ) -> list[dict[str, Any]]:
     by_batch = {str(m["productBatchNo"]): m for m in materials}
 
@@ -904,7 +925,7 @@ def build_public_candidate_plans(
         if sig not in candidates or score > candidates[sig][0]:
             candidates[sig] = (score, selected, metrics)
 
-    ranked = sorted(candidates.values(), key=lambda x: x[0], reverse=True)[:5]
+    ranked = sorted(candidates.values(), key=lambda x: x[0], reverse=True)[:max_plans]
     plans: list[dict[str, Any]] = []
     for _, selected, metrics in ranked:
         items = [
