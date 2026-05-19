@@ -272,10 +272,23 @@ def print_and_validate_length_report(dataset: Any, tokenizer: Any, max_length: i
         )
 
 
+def limit_dataset_size(dataset: Any, cfg: dict[str, Any]) -> Any:
+    limits = {
+        "train": int(cfg.get("max_train_samples", 0) or 0),
+        "validation": int(cfg.get("max_eval_samples", 0) or 0),
+    }
+    for split, limit in limits.items():
+        if limit > 0 and split in dataset and len(dataset[split]) > limit:
+            print(f"Limiting {split} split to first {limit} samples for a faster run.")
+            dataset[split] = dataset[split].select(range(limit))
+    return dataset
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a LoRA adapter for coal blending.")
     parser.add_argument("--config", default="configs/qwen_lora.yaml")
     parser.add_argument("--model-name-or-path", help="Override model_name_or_path from the config.")
+    parser.add_argument("--resume-from-checkpoint", help="Resume trainer state from an existing checkpoint directory.")
     parser.add_argument(
         "--dry-run-data",
         action="store_true",
@@ -316,6 +329,7 @@ def main() -> None:
     sft_format = str(cfg.get("sft_format", "prompt_completion"))
     if sft_format == "prompt_completion":
         dataset = prepare_prompt_completion_dataset(dataset)
+        dataset = limit_dataset_size(dataset, cfg)
         print_and_validate_length_report(
             dataset,
             tokenizer,
@@ -381,9 +395,12 @@ def main() -> None:
     model.print_trainable_parameters()
 
     # ── Training args ──────────────────────────────────────────
+    eval_strategy = str(cfg.get("eval_strategy", "steps"))
+    save_strategy = str(cfg.get("save_strategy", "steps"))
     training_args = SFTConfig(
         output_dir=resolve_path(cfg["output_dir"]),
         num_train_epochs=float(cfg.get("num_train_epochs", 3)),
+        max_steps=int(cfg.get("max_steps", -1)),
         per_device_train_batch_size=int(cfg.get("per_device_train_batch_size", 1)),
         per_device_eval_batch_size=int(cfg.get("per_device_eval_batch_size", 1)),
         gradient_accumulation_steps=int(cfg.get("gradient_accumulation_steps", 8)),
@@ -392,9 +409,10 @@ def main() -> None:
         logging_steps=int(cfg.get("logging_steps", 5)),
         eval_steps=int(cfg.get("eval_steps", 20)),
         save_steps=int(cfg.get("save_steps", 20)),
-        eval_strategy="steps",
-        save_strategy="steps",
-        save_total_limit=2,
+        eval_strategy=eval_strategy,
+        save_strategy=save_strategy,
+        save_total_limit=int(cfg.get("save_total_limit", 2)),
+        do_eval=eval_strategy != "no",
         fp16=(device != "cpu" and not cfg.get("bf16") and not use_4bit),
         bf16=bool(cfg.get("bf16", False)),
         report_to="none",
@@ -416,11 +434,12 @@ def main() -> None:
         model=model,
         args=training_args,
         train_dataset=dataset["train"],
-        eval_dataset=dataset["validation"],
+        eval_dataset=dataset["validation"] if eval_strategy != "no" else None,
         processing_class=tokenizer,
     )
 
-    trainer.train()
+    resume_from_checkpoint = args.resume_from_checkpoint or cfg.get("resume_from_checkpoint")
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     trainer.save_model(resolve_path(cfg["output_dir"]))
     tokenizer.save_pretrained(resolve_path(cfg["output_dir"]))
 
