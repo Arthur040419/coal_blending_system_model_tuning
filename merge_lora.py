@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
+from typing import Any
 
 import torch
 from peft import PeftModel
@@ -20,6 +22,24 @@ def default_dtype() -> torch.dtype:
     if torch.cuda.is_available() or torch.backends.mps.is_available():
         return torch.float16
     return torch.float32
+
+
+def tokenizer_kwargs_for(model_name_or_path: str, local_files_only: bool) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "trust_remote_code": True,
+        "local_files_only": local_files_only,
+        "use_fast": True,
+    }
+    cfg_path = Path(model_name_or_path) / "tokenizer_config.json"
+    if not cfg_path.exists():
+        return kwargs
+    try:
+        tokenizer_cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return kwargs
+    if isinstance(tokenizer_cfg.get("extra_special_tokens"), list):
+        kwargs["extra_special_tokens"] = {}
+    return kwargs
 
 
 def main() -> None:
@@ -61,9 +81,7 @@ def main() -> None:
     print("正在加载 tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(
         args.base_model,
-        trust_remote_code=True,
-        local_files_only=args.local_files_only,
-        use_fast=True,
+        **tokenizer_kwargs_for(args.base_model, args.local_files_only),
     )
 
     print("正在加载基础模型...")
