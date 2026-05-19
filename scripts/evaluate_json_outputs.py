@@ -7,6 +7,7 @@ import math
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -435,26 +436,64 @@ def _safe_float(value: object) -> float:
         return 0.0
 
 
+def _tokenizer_kwargs_for(model_name_or_path: str) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {"trust_remote_code": True, "use_fast": True}
+    cfg_path = Path(model_name_or_path) / "tokenizer_config.json"
+    if not cfg_path.exists():
+        return kwargs
+    try:
+        tokenizer_cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return kwargs
+    if isinstance(tokenizer_cfg.get("extra_special_tokens"), list):
+        kwargs["extra_special_tokens"] = {}
+    return kwargs
+
+
+def render_qwen_prompt(messages: list[dict]) -> str:
+    parts = []
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content", "")
+        if role not in {"system", "user", "assistant"}:
+            continue
+        parts.append(f"<|im_start|>{role}\n{content}<|im_end|>\n")
+    parts.append("<|im_start|>assistant\n")
+    return "".join(parts)
+
+
 def generate_outputs(
     rows: list[dict],
     base_model: str,
     adapter: str | None,
     max_new_tokens: int,
+    load_in_4bit: bool,
 ) -> list[str]:
     import torch
     from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-    tokenizer = AutoTokenizer.from_pretrained(adapter or base_model, trust_remote_code=True, use_fast=True)
+    tokenizer_source = adapter or base_model
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, **_tokenizer_kwargs_for(tokenizer_source))
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     device_map = "auto" if torch.cuda.is_available() else None
+    model_kwargs = {
+        "trust_remote_code": True,
+        "device_map": device_map,
+        "torch_dtype": torch.float16 if torch.cuda.is_available() else torch.float32,
+    }
+    if load_in_4bit and torch.cuda.is_available():
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+        )
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
-        trust_remote_code=True,
-        device_map=device_map,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+        **model_kwargs,
     )
     if adapter:
         model = PeftModel.from_pretrained(model, adapter)
@@ -463,7 +502,7 @@ def generate_outputs(
     outputs: list[str] = []
     for row in rows:
         messages = row["messages"][:-1]
-        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        prompt = render_qwen_prompt(messages)
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
         with torch.no_grad():
             generated = model.generate(
@@ -485,6 +524,7 @@ def main() -> None:
     parser.add_argument("--base-model", help="Base model path/name for generation.")
     parser.add_argument("--adapter", help="LoRA adapter path. If omitted, evaluates base model.")
     parser.add_argument("--max-new-tokens", type=int, default=2048)
+    parser.add_argument("--load-in-4bit", action="store_true", help="Load base model in 4-bit for CUDA evaluation.")
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--predictions-file", default="outputs/reports/predictions.jsonl")
     parser.add_argument("--report-file", default="outputs/reports/eval_report.json")
@@ -496,7 +536,7 @@ def main() -> None:
     rows = read_jsonl(eval_path)[: args.limit]
 
     if args.base_model:
-        outputs = generate_outputs(rows, args.base_model, args.adapter, args.max_new_tokens)
+        outputs = generate_outputs(rows, args.base_model, args.adapter, args.max_new_tokens, args.load_in_4bit)
     else:
         outputs = [json.dumps(r["output"], ensure_ascii=False) for r in rows]
 
