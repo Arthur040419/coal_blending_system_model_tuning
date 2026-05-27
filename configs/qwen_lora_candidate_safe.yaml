@@ -28,7 +28,7 @@
 #   - Early stopping with patience=2.
 #   - No init_adapter — start from a clean base.
 
-model_name_or_path: Qwen/Qwen3-4B-Instruct-2507
+model_name_or_path: D:\models\Qwen3-4B-Instruct-2507
 train_file: data/processed_candidate_safe/train.jsonl
 eval_file: data/processed_candidate_safe/eval.jsonl
 output_dir: outputs/adapters/qwen3-4b-coal-candidate-safe-lora
