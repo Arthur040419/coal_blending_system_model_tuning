@@ -1,0 +1,76 @@
+# "安全 LoRA" recipe — designed to fix the v1/v2 regression where the tuned
+# adapter scored worse than the Qwen3-4B-Instruct base on business metrics.
+#
+# Root cause recap (see README.md "调优失败诊断与新 recipe" 章节):
+#   1. Original training set is ~56 samples; 57/70 are synthesized PUBLIC
+#      scenarios with only 7 unique planNames and a fixed ratio grid like
+#      (0.7, 0.2, 0.1). The model overfits to those rigid templates.
+#   2. lr=1e-4 + 4 epochs on full attention+MLP LoRA destroys base reasoning.
+#   3. v2 init_adapter=checkpoint-10 inherits an already-overfit prior.
+#   4. No in-training eval, no best-checkpoint selection.
+#
+# This config addresses each:
+#   - Train on a diversified dataset rebuilt with --diversify-public so ratio
+#     jitter + planName pool + risk-phrase pool break the memorization pattern.
+#     Build it once with:
+#       python3 scripts/build_dataset.py \
+#         --tasks candidate \
+#         --compact-candidate-context \
+#         --diversify-public \
+#         --diversify-variants 3 \
+#         --candidate-prompt-style backend \
+#         --output-dir data/processed_candidate_safe
+#   - Only LoRA q_proj and v_proj (classic LoRA paper choice), at r=8 alpha=8
+#     (1x scaling instead of 2x) to minimize damage to base knowledge.
+#   - Conservative lr=2e-5, 1 epoch, with warmup.
+#   - In-training eval every step bucket + load_best_model_at_end on eval_loss
+#     so we ship the best checkpoint, not the last one.
+#   - Early stopping with patience=2.
+#   - No init_adapter — start from a clean base.
+
+model_name_or_path: Qwen/Qwen3-4B-Instruct-2507
+train_file: data/processed_candidate_safe/train.jsonl
+eval_file: data/processed_candidate_safe/eval.jsonl
+output_dir: outputs/adapters/qwen3-4b-coal-candidate-safe-lora
+datasets_cache_dir: outputs/cache/datasets
+
+max_seq_length: 4096
+sft_format: prompt_completion
+filter_task: candidate_generation
+completion_only_loss: true
+assistant_only_loss: false
+fail_on_truncated_completion: true
+
+num_train_epochs: 1
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 8
+gradient_checkpointing: true
+learning_rate: 0.00002
+warmup_ratio: 0.1
+logging_steps: 2
+
+# Light-touch LoRA: attention-only, alpha == r (no extra scaling).
+lora_r: 8
+lora_alpha: 8
+lora_dropout: 0.05
+target_modules:
+  - q_proj
+  - v_proj
+
+# In-training eval + best-checkpoint selection.
+eval_strategy: "steps"
+save_strategy: "steps"
+eval_steps: 5
+save_steps: 5
+save_total_limit: 2
+load_best_model_at_end: true
+metric_for_best_model: eval_loss
+greater_is_better: false
+early_stopping_patience: 2
+early_stopping_threshold: 0.0
+
+use_4bit: true
+bf16: false
+fp16: true
+allow_cpu_training: false

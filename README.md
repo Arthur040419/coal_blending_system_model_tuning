@@ -103,6 +103,76 @@ python3 scripts/build_dataset.py --tasks explanation
 
 公开煤质数据来源说明见 [docs/公开煤质数据来源.md](docs/公开煤质数据来源.md)。
 
+## 调优失败诊断与新 recipe（v3 安全方案）
+
+在 `outputs/adapters/qwen3-4b-coal-candidate-lora` 系列实验中，我们发现调优后的 LoRA 接入主系统后业务评分反而低于 `Qwen3-4B-Instruct-2507` 基座。复盘原因有 4 条：
+
+1. **训练集太小且分布失衡。** `data/processed_candidate_v2` 只有 56 条训练样本，其中 13 条来自真实 SQL 业务计划、57 条来自 `dataset.py` 用启发式打分函数合成的公开场景模板。
+2. **合成标签的多样性极差。** 56 条样本里共 159 个候选方案，但只有 **7 个唯一 planName**（`公开煤质候选方案-A/B/C` 重复 46 次/个），ratio 元组高度集中在固定网格（`(0.7,0.2,0.1)` 出现 45 次），risk 文本几乎完全复制。LoRA 实际学到的是"复述这 3 套模板"。
+3. **超参对 4B QLoRA 偏激进。** `lr=1e-4`、4 epochs、同时对 attention+MLP 全部模块加 LoRA（`q/k/v/o/gate/up/down`）、`lora_alpha=16, r=8` 等价 2x scaling，在 56 条样本上轻易破坏基座的通用推理能力。
+4. **没有 in-training eval 与 best-checkpoint 选择。** `eval_strategy: "no"` + `save_strategy: epoch` 直接保存最后一轮，无法挑出最佳 checkpoint。同时 v2 配置又从 v1 的 `checkpoint-10` 继续训练，把过拟合偏置叠加上去。
+
+此外，从 `outputs/reports/candidate_gold_eval_report.json` 可知，合成 gold label 本身只有 `average_business_effect_score=0.8731`、`成本优势=0.5623`——即使模型完美拟合也只能到这个上限。
+
+### 新 recipe 一览
+
+新建了两套**互相对照**的安全配置，并在 `build_dataset.py` 增加 `--real-only` 与 `--diversify-public` 开关：
+
+| 配置 | 数据策略 | LoRA 超参 |
+|------|---------|----------|
+| `configs/qwen_lora_candidate_safe.yaml` | 70→184 条，公开场景 ratio 抖动 + planName 池 + risk 文本池打散记忆 | lr=2e-5、1 epoch、只 LoRA q_proj/v_proj、r=8 α=8（1x） |
+| `configs/qwen_lora_candidate_real_only.yaml` | 仅 13 条真实 SQL 计划，舍弃所有合成场景 | lr=1e-5、2 epoch、q_proj/v_proj、r=4 α=4 |
+
+两套配置都默认：
+
+- `eval_strategy: steps` + `load_best_model_at_end: true` + `metric_for_best_model: eval_loss`，自动选最佳 checkpoint；
+- `early_stopping_patience: 2`，eval loss 不再下降就早停；
+- 不再 `init_adapter`，从干净基座开始；
+- `save_total_limit: 2`，保留最近两个 checkpoint。
+
+### 数据多样性对比（实测）
+
+| 维度 | 旧 v2（56 行） | 新 safe（148 行） | 新 real_only（11 行） |
+|------|----|----|----|
+| 总候选方案数 | 159 | **718** | 36 |
+| 唯一 planName | 7 | **47** | 8 |
+| 唯一 ratio 组合 | 23 | **389** | 22 |
+| 唯一 risk 文本 | 20 | **170** | 19 |
+| 最高频 ratio 占比 | (0.7,0.2,0.1) × 45 | (0.72,0.2,0.08) × 10 | 自然分布 |
+
+### 重新生成数据 + 重新训练
+
+```bash
+# 1) 生成 safe 数据集（公开场景 ratio 抖动 + 3 种变体）
+python3 scripts/build_dataset.py \
+  --tasks candidate \
+  --compact-candidate-context \
+  --diversify-public \
+  --diversify-variants 3 \
+  --candidate-prompt-style backend \
+  --output-dir data/processed_candidate_safe
+
+# 2) 生成 real-only 数据集（用于对照实验）
+python3 scripts/build_dataset.py \
+  --tasks candidate \
+  --compact-candidate-context \
+  --real-only \
+  --candidate-prompt-style backend \
+  --output-dir data/processed_candidate_real_only
+
+# 3) 训练 safe LoRA（推荐主路线）
+.venv/bin/python scripts/train_lora.py --config configs/qwen_lora_candidate_safe.yaml
+
+# 4) 训练 real-only LoRA（对照实验）
+.venv/bin/python scripts/train_lora.py --config configs/qwen_lora_candidate_real_only.yaml
+```
+
+训练完成后，**最重要的一步**是把基座和新 LoRA 都接入主系统，用同一组订单跑业务评分。只有当 `average_business_effect_score`（或 `radar_metrics` 综合得分）严格高于基座，这次调优才算成功，否则放弃 adapter 并继续调整 recipe。
+
+`valid_json_rate=1.0` 这类格式指标对 Qwen3-4B 不再有筛选意义，**不能用作 hyperparameter 搜索的目标**，论文中只作为基础诊断保留。
+
+---
+
 ## 训练 LoRA
 
 默认基座模型已经配置为 `Qwen/Qwen3-4B-Instruct-2507`，对应 Ollama 侧常用 tag `qwen3:4b`。注意：`qwen3:4b` 是 Ollama tag，不能直接作为 transformers 训练脚本的 `model_name_or_path`。

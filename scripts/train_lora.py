@@ -39,6 +39,7 @@ try:
         AutoModelForCausalLM,
         AutoTokenizer,
         BitsAndBytesConfig,
+        EarlyStoppingCallback,
     )
     from trl import SFTConfig, SFTTrainer
 except ModuleNotFoundError as exc:
@@ -403,6 +404,17 @@ def main() -> None:
     # ── Training args ──────────────────────────────────────────
     eval_strategy = str(cfg.get("eval_strategy", "steps"))
     save_strategy = str(cfg.get("save_strategy", "steps"))
+    load_best_model_at_end = bool(cfg.get("load_best_model_at_end", False))
+    # HuggingFace requires save_strategy == eval_strategy when load_best_model_at_end is True.
+    if load_best_model_at_end and eval_strategy != "no":
+        if save_strategy != eval_strategy:
+            print(
+                f"load_best_model_at_end=True requires save_strategy == eval_strategy; "
+                f"overriding save_strategy from {save_strategy!r} to {eval_strategy!r}."
+            )
+            save_strategy = eval_strategy
+    metric_for_best_model = cfg.get("metric_for_best_model")
+    greater_is_better = cfg.get("greater_is_better")
     training_args = SFTConfig(
         output_dir=resolve_path(cfg["output_dir"]),
         num_train_epochs=float(cfg.get("num_train_epochs", 3)),
@@ -419,6 +431,11 @@ def main() -> None:
         save_strategy=save_strategy,
         save_total_limit=int(cfg.get("save_total_limit", 2)),
         do_eval=eval_strategy != "no",
+        load_best_model_at_end=load_best_model_at_end and eval_strategy != "no",
+        metric_for_best_model=metric_for_best_model if load_best_model_at_end else None,
+        greater_is_better=(
+            bool(greater_is_better) if greater_is_better is not None and load_best_model_at_end else None
+        ),
         fp16=(device != "cpu" and not cfg.get("bf16") and not use_4bit),
         bf16=bool(cfg.get("bf16", False)),
         report_to="none",
@@ -443,6 +460,19 @@ def main() -> None:
         eval_dataset=dataset["validation"] if eval_strategy != "no" else None,
         processing_class=tokenizer,
     )
+
+    early_stopping_patience = int(cfg.get("early_stopping_patience", 0) or 0)
+    if early_stopping_patience > 0 and eval_strategy != "no":
+        threshold = float(cfg.get("early_stopping_threshold", 0.0) or 0.0)
+        trainer.add_callback(
+            EarlyStoppingCallback(
+                early_stopping_patience=early_stopping_patience,
+                early_stopping_threshold=threshold,
+            )
+        )
+        print(
+            f"EarlyStopping enabled: patience={early_stopping_patience}, threshold={threshold}"
+        )
 
     resume_from_checkpoint = args.resume_from_checkpoint or cfg.get("resume_from_checkpoint")
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)

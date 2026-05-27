@@ -41,7 +41,24 @@ def build_training_records(
     candidate_max_rag: int = 3,
     candidate_max_plans: int = 5,
     candidate_prompt_style: str = "training",
+    real_only: bool = False,
+    diversify_public: bool = False,
+    diversify_variants: int = 1,
+    diversify_seed: int = 1234,
 ) -> list[dict[str, Any]]:
+    """Build training records.
+
+    Parameters that matter for the LoRA fix:
+    - real_only: drop the synthesized public-scenario records. Use this when you
+      only want the high-fidelity SQL-derived labels and prefer a small but
+      trustworthy training set.
+    - diversify_public: when True, the public-scenario plans get ratio jitter,
+      a planName pool and a randomized risk-phrase order. This breaks the rigid
+      memorization pattern the original templated labels create.
+    - diversify_variants: per public scenario, emit this many independently
+      jittered variants (deterministic per scenario id). Set >1 to expand the
+      training set while preserving label realism.
+    """
     records: list[dict[str, Any]] = []
     if include_explanation:
         records.extend(build_explanation_records(tables))
@@ -58,7 +75,7 @@ def build_training_records(
                 prompt_style=candidate_prompt_style,
             )
         )
-        if public_samples:
+        if public_samples and not real_only:
             records.extend(
                 build_public_candidate_generation_records(
                     public_samples,
@@ -66,6 +83,9 @@ def build_training_records(
                     max_materials=candidate_max_materials,
                     max_plans=candidate_max_plans,
                     prompt_style=candidate_prompt_style,
+                    diversify=diversify_public,
+                    diversify_variants=max(1, int(diversify_variants)),
+                    diversify_seed=int(diversify_seed),
                 )
             )
     return records
@@ -255,47 +275,81 @@ def build_public_candidate_generation_records(
     max_materials: int = 8,
     max_plans: int = 5,
     prompt_style: str = "training",
+    diversify: bool = False,
+    diversify_variants: int = 1,
+    diversify_seed: int = 1234,
 ) -> list[dict[str, Any]]:
     cleaned = [s for s in samples if _has_public_quality(s)]
     records: list[dict[str, Any]] = []
     scenarios = _build_all_public_scenarios()
+    variants = max(1, int(diversify_variants)) if diversify else 1
     for scenario in scenarios:
-        materials = public_samples_to_materials(cleaned)
-        plans = build_public_candidate_plans(scenario, materials, compact=compact, max_plans=max_plans)
-        if len(plans) < 3:
-            continue
-        output = {"plans": plans}
-        if compact:
-            materials = select_materials_for_output(materials, output, max_materials)
-            plans = _filter_output_to_materials(plans, materials)
-            output = {"plans": plans}
+        for variant_idx in range(variants):
+            materials = public_samples_to_materials(cleaned)
+            plan_rng = (
+                _scenario_rng(scenario, diversify_seed, variant_idx) if diversify else None
+            )
+            plans = build_public_candidate_plans(
+                scenario,
+                materials,
+                compact=compact,
+                max_plans=max_plans,
+                rng=plan_rng,
+            )
             if len(plans) < 3:
                 continue
-        context = build_public_candidate_context(scenario, materials, compact=compact)
-        user_prompt = build_candidate_prompt(context, prompt_style)
-        assistant_output = json_dumps(output)
-        records.append(
-            {
-                "id": f"candidate-{scenario['id']}",
-                "task": "candidate_generation",
-                "system": CANDIDATE_SYSTEM_PROMPT,
-                "input": user_prompt,
-                "output": output,
-                "prompt": [
-                    {"role": "system", "content": CANDIDATE_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "completion": [{"role": "assistant", "content": assistant_output}],
-                "messages": [
-                    {"role": "system", "content": CANDIDATE_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                    {"role": "assistant", "content": assistant_output},
-                ],
-                "text": to_chatml(CANDIDATE_SYSTEM_PROMPT, user_prompt, assistant_output),
-                "meta": {"source": "public_coal_quality_samples", "scenario": scenario["id"]},
-            }
-        )
+            output = {"plans": plans}
+            if compact:
+                materials = select_materials_for_output(materials, output, max_materials)
+                plans = _filter_output_to_materials(plans, materials)
+                output = {"plans": plans}
+                if len(plans) < 3:
+                    continue
+            context = build_public_candidate_context(scenario, materials, compact=compact)
+            user_prompt = build_candidate_prompt(context, prompt_style)
+            assistant_output = json_dumps(output)
+            record_id = (
+                f"candidate-{scenario['id']}-v{variant_idx + 1}"
+                if diversify and variants > 1
+                else f"candidate-{scenario['id']}"
+            )
+            records.append(
+                {
+                    "id": record_id,
+                    "task": "candidate_generation",
+                    "system": CANDIDATE_SYSTEM_PROMPT,
+                    "input": user_prompt,
+                    "output": output,
+                    "prompt": [
+                        {"role": "system", "content": CANDIDATE_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "completion": [{"role": "assistant", "content": assistant_output}],
+                    "messages": [
+                        {"role": "system", "content": CANDIDATE_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                        {"role": "assistant", "content": assistant_output},
+                    ],
+                    "text": to_chatml(CANDIDATE_SYSTEM_PROMPT, user_prompt, assistant_output),
+                    "meta": {
+                        "source": "public_coal_quality_samples",
+                        "scenario": scenario["id"],
+                        "variant": variant_idx,
+                        "diversified": bool(diversify),
+                    },
+                }
+            )
     return records
+
+
+def _scenario_rng(
+    scenario: dict[str, object | None],
+    seed: int,
+    variant_idx: int,
+) -> random.Random:
+    """Deterministic per-(scenario, variant) RNG for reproducible diversification."""
+    seed_str = f"{seed}|{scenario.get('id') or scenario.get('orderCode') or ''}|{variant_idx}"
+    return random.Random(seed_str)
 
 
 def _build_all_public_scenarios() -> list[dict[str, object | None]]:
@@ -873,6 +927,7 @@ def build_public_candidate_plans(
     materials: list[dict[str, object | None]],
     compact: bool = False,
     max_plans: int = 5,
+    rng: random.Random | None = None,
 ) -> list[dict[str, Any]]:
     by_batch = {str(m["productBatchNo"]): m for m in materials}
 
@@ -927,7 +982,16 @@ def build_public_candidate_plans(
 
     ranked = sorted(candidates.values(), key=lambda x: x[0], reverse=True)[:max_plans]
     plans: list[dict[str, Any]] = []
+    plan_name_pool = _diverse_plan_name_pool(scenario) if rng is not None else None
+    used_plan_names: set[str] = set()
     for _, selected, metrics in ranked:
+        if rng is not None:
+            jittered = _jitter_selected_ratios(selected, rng)
+            # Recompute metrics on jittered ratios so strategy text stays consistent.
+            metrics = _weighted_public_metrics(jittered)
+            selected_for_items = jittered
+        else:
+            selected_for_items = selected
         items = [
             {
                 "coalId": _to_int(m["coalId"]),
@@ -935,22 +999,94 @@ def build_public_candidate_plans(
                 "ratio": round(ratio, 4),
                 "reason": _public_item_reason(m, scenario),
             }
-            for m, ratio in selected
+            for m, ratio in selected_for_items
         ]
         # Normalise ratios to sum exactly to 1.
         total_r = sum(float(i["ratio"]) for i in items)
         if total_r > 0:
             for i in items:
                 i["ratio"] = round(float(i["ratio"]) / total_r, 4)
+        if plan_name_pool is not None:
+            plan_name = _pick_unique(plan_name_pool, used_plan_names, rng)
+            used_plan_names.add(plan_name)
+        else:
+            plan_name = f"公开煤质候选方案-{chr(64 + len(plans) + 1)}"
         plans.append(
             {
-                "planName": f"公开煤质候选方案-{chr(64 + len(plans) + 1)}",
-                "strategy": _public_plan_strategy(scenario, selected, metrics, compact=compact),
+                "planName": plan_name,
+                "strategy": _public_plan_strategy(scenario, selected_for_items, metrics, compact=compact),
                 "items": items,
-                "risk": _public_plan_risk(scenario, selected, metrics),
+                "risk": _public_plan_risk(
+                    scenario, selected_for_items, metrics, rng=rng
+                ),
             }
         )
     return plans
+
+
+def _jitter_selected_ratios(
+    selected: list[tuple[dict[str, object | None], float]],
+    rng: random.Random,
+    max_delta: float = 0.04,
+    min_ratio: float = 0.08,
+) -> list[tuple[dict[str, object | None], float]]:
+    """Apply small ratio jitter then renormalize.
+
+    Keeps every ratio above min_ratio so LoRA does not learn degenerate
+    `ratio=0` items, and clamps the total perturbation to max_delta per item.
+    """
+    if not selected:
+        return selected
+    perturbed = []
+    for material, ratio in selected:
+        delta = rng.uniform(-max_delta, max_delta)
+        new_ratio = max(min_ratio, float(ratio) + delta)
+        perturbed.append((material, new_ratio))
+    total = sum(r for _, r in perturbed)
+    if total <= 0:
+        return selected
+    normalized = [(m, round(r / total, 4)) for m, r in perturbed]
+    # Snap to 4 decimal places and absorb rounding error into the largest item.
+    snap_total = sum(r for _, r in normalized)
+    if abs(snap_total - 1.0) > 1e-4:
+        biggest_idx = max(range(len(normalized)), key=lambda i: normalized[i][1])
+        m, r = normalized[biggest_idx]
+        normalized[biggest_idx] = (m, round(r + (1.0 - snap_total), 4))
+    return normalized
+
+
+def _diverse_plan_name_pool(scenario: dict[str, object | None]) -> list[str]:
+    """Return a scenario-themed planName pool so LoRA does not memorize the
+    same three labels across the whole training set."""
+    sid = str(scenario.get("id") or "")
+    if "low-sulfur" in sid or "ultra-low" in sid:
+        return ["低硫主力配比", "低硫质量优先方案", "低硫成本平衡方案", "低硫风险控制方案", "环保合规掺配方案"]
+    if "high-heat" in sid:
+        return ["高热值提供主力方案", "热值保障方案", "无烟煤主导方案", "低挥发分配合方案", "高热值稳燃方案"]
+    if "zhundong" in sid:
+        return ["准东煤稳掺方案", "结渣风险控制方案", "准东掺烧扩比方案", "钠盐稀释方案", "准东低比例保守方案"]
+    if "balanced" in sid:
+        return ["四煤种均衡方案", "中档主力方案", "成本质量并重方案", "多仓库存分摊方案", "宽约束均衡方案"]
+    if "cost-priority" in sid or "cost" in sid:
+        return ["低成本经济方案", "高比例低质煤方案", "经济掺烧方案", "降本稳燃方案", "宽约束成本优先方案"]
+    if "volatile" in sid:
+        return ["挥发分差控制方案", "高低挥发分搭配方案", "挥发分稳燃方案", "无烟煤低比例方案", "标准合规挥发分方案"]
+    if "coking" in sid:
+        return ["主焦煤主导方案", "炼焦煤优质方案", "低灰强粘结方案", "焦煤成本控制方案", "焦煤硫分控制方案"]
+    if "high-quantity" in sid or "quantity" in sid:
+        return ["保供大用量方案", "多仓分摊方案", "库存压力释放方案", "保供质量方案", "保供成本方案"]
+    return ["主力推荐方案", "质量稳态方案", "成本优先方案", "库存平衡方案", "保留余量方案"]
+
+
+def _pick_unique(
+    pool: list[str], used: set[str], rng: random.Random | None
+) -> str:
+    available = [name for name in pool if name not in used]
+    if not available:
+        available = pool
+    if rng is None:
+        return available[0]
+    return rng.choice(available)
 
 
 def select_materials_for_output(
@@ -1317,25 +1453,71 @@ def _bounded(value: float, lower: float, upper: float) -> float:
     return max(lower, min(value, upper))
 
 
+_RISK_PHRASE_POOL: dict[str, list[str]] = {
+    "base": [
+        "公开样本来自文献、标准或行业公开资料整理，执行前需用企业入厂煤质检测值复核。",
+        "本方案基于公开煤质资料估算，正式执行前应以入厂检测值为准。",
+        "公开样本仅供调优参考，落地前需复核实测煤质和库存。",
+        "数据来源为公开行业资料整理，建议结合现场检测复核后再投运。",
+    ],
+    "sulfur": [
+        "预测硫分接近上限，需保留低硫煤替代余量。",
+        "硫分余量偏紧，应预留低硫煤替换通道。",
+        "硫分逼近限值，建议同时备好低硫掺配方案。",
+    ],
+    "moisture": [
+        "预测水分接近上限，应控制露天堆放和雨季含水波动。",
+        "水分较高，需注意堆场防雨与运输干燥。",
+        "水分余量较小，需关注雨季入厂含水波动。",
+    ],
+    "calorific": [
+        "热值余量较小，交付前应复核低位发热量。",
+        "热值接近下限，建议复核 Qnet,ar 并预备补热煤。",
+        "热值余量有限，可考虑微调高热值煤占比。",
+    ],
+    "zhundong": [
+        "含准东煤时需关注高钠导致的结渣沾污风险。",
+        "含准东煤需关注高钠引发的受热面结渣。",
+        "准东煤掺烧应监控炉膛沾污与结渣信号。",
+    ],
+    "volatile": [
+        "高低挥发分差值较大，应先做燃烧稳定性验证。",
+        "挥发分差较大，建议先做小比例燃烧试验。",
+        "挥发分差异显著，需先验证锅炉燃烧稳定性。",
+    ],
+}
+
+
 def _public_plan_risk(
     scenario: dict[str, object | None],
     selected: list[tuple[dict[str, object | None], float]],
     metrics: dict[str, float],
+    rng: random.Random | None = None,
 ) -> str:
-    risks = ["公开样本来自文献、标准或行业公开资料整理，执行前需用企业入厂煤质检测值复核。"]
+    def pick(category: str) -> str:
+        options = _RISK_PHRASE_POOL[category]
+        if rng is None:
+            return options[0]
+        return rng.choice(options)
+
+    risks: list[str] = [pick("base")]
     target_sulfur = _num(scenario.get("targetSulfur"))
     target_moisture = _num(scenario.get("targetMoisture"))
     target_calorific = _num(scenario.get("targetCalorific"))
     if target_sulfur > 0 and target_sulfur - metrics["sulfur"] <= 0.05:
-        risks.append("预测硫分接近上限，需保留低硫煤替代余量。")
+        risks.append(pick("sulfur"))
     if target_moisture > 0 and target_moisture - metrics["moisture"] <= 0.8:
-        risks.append("预测水分接近上限，应控制露天堆放和雨季含水波动。")
+        risks.append(pick("moisture"))
     if target_calorific > 0 and metrics["calorific"] - target_calorific <= 120:
-        risks.append("热值余量较小，交付前应复核低位发热量。")
+        risks.append(pick("calorific"))
     if any("准东" in str(material.get("name") or "") for material, _ in selected):
-        risks.append("含准东煤时需关注高钠导致的结渣沾污风险。")
+        risks.append(pick("zhundong"))
     if not _public_volatile_reasonable(selected):
-        risks.append("高低挥发分差值较大，应先做燃烧稳定性验证。")
+        risks.append(pick("volatile"))
+    if rng is not None and len(risks) > 1:
+        head, *tail = risks[:4]
+        rng.shuffle(tail)
+        risks = [head, *tail]
     return "".join(risks[:4])
 
 

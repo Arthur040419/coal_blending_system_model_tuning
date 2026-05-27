@@ -82,6 +82,41 @@ def main() -> None:
         default="training",
         help="Use the original training prompt or the backend AiBlendCandidateServiceImpl prompt style.",
     )
+    parser.add_argument(
+        "--real-only",
+        action="store_true",
+        help=(
+            "Only keep candidate samples derived from the real SQL backend plans. "
+            "Drops the synthesized public-scenario records. Recommended when you want "
+            "high-fidelity labels even though the resulting set is small."
+        ),
+    )
+    parser.add_argument(
+        "--diversify-public",
+        action="store_true",
+        help=(
+            "When building synthesized public-scenario records, apply ratio jitter, "
+            "a scenario-themed planName pool and randomized risk-phrase order. "
+            "Breaks the rigid memorization pattern that the original templated labels "
+            "create for the LoRA fine-tune."
+        ),
+    )
+    parser.add_argument(
+        "--diversify-variants",
+        type=int,
+        default=1,
+        help=(
+            "Number of independently jittered variants per public scenario. Only used "
+            "when --diversify-public is set. Each variant is deterministic per "
+            "(scenario_id, variant_idx)."
+        ),
+    )
+    parser.add_argument(
+        "--diversify-seed",
+        type=int,
+        default=1234,
+        help="Seed used to drive ratio jitter, planName and risk-phrase selection.",
+    )
     args = parser.parse_args()
 
     sql_path = (ROOT / args.sql).resolve() if not Path(args.sql).is_absolute() else Path(args.sql)
@@ -104,6 +139,10 @@ def main() -> None:
         candidate_max_rag=args.candidate_max_rag,
         candidate_max_plans=args.candidate_max_plans,
         candidate_prompt_style=args.candidate_prompt_style,
+        real_only=args.real_only,
+        diversify_public=args.diversify_public,
+        diversify_variants=args.diversify_variants,
+        diversify_seed=args.diversify_seed,
     )
     if not records:
         raise SystemExit("No usable training records were generated. Check SQL dump content.")
