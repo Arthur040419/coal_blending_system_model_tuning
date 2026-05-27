@@ -1,0 +1,66 @@
+# "安全 LoRA" recipe for Qwen2.5-3B-Instruct on 8GB-class consumer GPUs
+# (e.g. RTX 4070 Laptop / RTX 3060 / RTX 4060). The Qwen3-4B variant
+# `qwen_lora_candidate_safe.yaml` is the preferred recipe on ≥12GB GPUs;
+# this 3B variant exists because 4B QLoRA at seq_length ~3.5k exceeds
+# 8GB VRAM under Windows WDDM and silently falls back to shared system RAM
+# (training stalls at step 0 for hours).
+#
+# It reuses the same diversified dataset built with --diversify-public, so
+# the data quality story is identical to the 4B safe recipe; only the base
+# model size changes. Build the dataset once with:
+#   python scripts/build_dataset.py `
+#     --tasks candidate `
+#     --compact-candidate-context `
+#     --diversify-public `
+#     --diversify-variants 3 `
+#     --candidate-prompt-style backend `
+#     --output-dir data/processed_candidate_safe
+
+model_name_or_path: D:\models\Qwen2.5-3B-Instruct
+train_file: data/processed_candidate_safe/train.jsonl
+eval_file: data/processed_candidate_safe/eval.jsonl
+output_dir: outputs/adapters/qwen2.5-3b-coal-candidate-safe-lora
+datasets_cache_dir: outputs/cache/datasets
+
+max_seq_length: 3584
+sft_format: prompt_completion
+filter_task: candidate_generation
+completion_only_loss: true
+assistant_only_loss: false
+fail_on_truncated_completion: true
+
+num_train_epochs: 1
+per_device_train_batch_size: 1
+per_device_eval_batch_size: 1
+gradient_accumulation_steps: 4
+gradient_checkpointing: true
+learning_rate: 0.00002
+warmup_ratio: 0.1
+logging_steps: 1
+
+# Light-touch LoRA: attention-only, alpha == r (no extra scaling).
+lora_r: 8
+lora_alpha: 8
+lora_dropout: 0.05
+target_modules:
+  - q_proj
+  - v_proj
+
+# In-training eval + best-checkpoint selection.
+eval_strategy: "steps"
+save_strategy: "steps"
+eval_steps: 5
+save_steps: 5
+save_total_limit: 2
+load_best_model_at_end: true
+metric_for_best_model: eval_loss
+greater_is_better: false
+early_stopping_patience: 2
+early_stopping_threshold: 0.0
+
+# Ada Lovelace (4070 Laptop) supports bf16 natively; Qwen was pretrained in
+# bf16 so it is also more numerically stable than fp16 for QLoRA SFT.
+use_4bit: true
+bf16: true
+fp16: false
+allow_cpu_training: false
